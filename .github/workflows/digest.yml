@@ -1,0 +1,67 @@
+name: Daily AI Digest
+
+on:
+  schedule:
+    - cron: "0 13 * * *"        # 09:00 America/New_York
+  workflow_dispatch:
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps with micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-file: environment.yml
+          cache-env: true
+          init-shell: bash      # makes "micromamba activate" work
+
+      - name: Build digest with LangGraph
+        shell: bash -l {0}
+        run: |
+          micromamba activate ai-news-agent
+          python src/main.py
+
+      - name: Create or update issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const today = new Date().toISOString().slice(0,10);
+            const body  = fs.readFileSync('news.md','utf8');
+
+            // search for an open digest issue for today
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: 'ai-digest'
+            });
+
+            const existing = issues.find(i => i.title === `AI Headlines – ${today}`);
+
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: existing.number,
+                body
+              });
+              core.info(`Updated existing issue #${existing.number}`);
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                title: `AI Headlines – ${today}`,
+                body,
+                labels: ['ai-digest']
+              });
+              core.info("Created new issue for today's digest");
+            }

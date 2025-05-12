@@ -1,0 +1,12 @@
+name: ai-news-agent
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - feedparser
+  - python-dotenv
+  - pip
+  - pip:
+      - langgraph
+      - langchain-core
+      - openai
