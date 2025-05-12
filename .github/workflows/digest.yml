@@ -1,4 +1,8 @@
-name: Daily AI Digest
+name: Daily AI News Digest
+
+permissions:
+  contents: read
+  issues: write 
 
 on:
   schedule:
