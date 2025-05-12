@@ -1,6 +1,6 @@
 # ai-news-agent
 
-**ai-news-agent** — a lightweight AI agent that grabs fresh AI-related headlines and posts a daily digest to GitHub Issues.
+A lightweight AI agent that grabs fresh AI-related headlines and posts a daily digest to GitHub Issues.
 
 👉  **Daily digests live in [Issues](https://github.com/nickzren/ai-news-agent/issues).**
 
