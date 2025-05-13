@@ -3,26 +3,71 @@ from datetime import datetime, timedelta, timezone
 
 _DAY = timedelta(days=1)
 
-FEEDS = [
-    # News & Magazines
-    "https://www.technologyreview.com/topic/artificial-intelligence/feed/",
-    "https://www.wired.com/feed/tag/ai/latest/rss",
-    "https://feeds.arstechnica.com/arstechnica/technology-lab",
-    "https://techcrunch.com/tag/artificial-intelligence/feed/",
-    "https://venturebeat.com/category/ai/feed/",
+FEEDS = {
     # Lab & Research blogs
-    "https://openai.com/feed.xml",
-    "https://ai.googleblog.com/atom.xml",
-    "https://www.deepmind.com/feeds/blog.xml",
-    "https://www.anthropic.com/news-feed.xml",
-    "https://huggingface.co/blog/rss.xml",
+    "https://openai.com/news/rss.xml": {
+        "category": "Lab Blogs",
+        "source": "OpenAI"
+    },
+    "https://blog.google/technology/ai/rss/": {
+        "category": "Lab Blogs",
+        "source": "Google"
+    },
+    "https://huggingface.co/blog/feed.xml": {
+        "category": "Lab Blogs",
+        "source": "Hugging Face"
+    },
+
+    # News & Magazines
+    "https://www.technologyreview.com/topic/artificial-intelligence/feed/": {
+        "category": "News & Mags",
+        "source": "MIT Technology Review"
+    },
+    "https://www.wired.com/feed/tag/ai/latest/rss": {
+        "category": "News & Mags",
+        "source": "Wired"
+    },
+    "https://feeds.arstechnica.com/arstechnica/technology-lab": {
+        "category": "News & Mags",
+        "source": "Ars Technica"
+    },
+    "https://techcrunch.com/tag/artificial-intelligence/feed/": {
+        "category": "News & Mags",
+        "source": "TechCrunch"
+    },
+    "https://venturebeat.com/category/ai/feed/": {
+        "category": "News & Mags",
+        "source": "VentureBeat"
+    },
+
     # Newsletters / Aggregators
-    "https://bensbites.beehiiv.com/feed",
-    "https://jackclark.net/feed.xml",
+    "https://thesequence.substack.com/feed": {
+        "category": "Newsletters",
+        "source": "The Sequence"
+    },
+    "https://importai.substack.com/feed": {
+        "category": "Newsletters",
+        "source": "Import AI"
+    },
+    "https://www.latent.space/feed.xml": {
+        "category": "Newsletters",
+        "source": "Latent Space"
+    },
+    "https://aibreakfast.substack.com/feed": {
+        "category": "Newsletters",
+        "source": "AI Breakfast"
+    },
+
     # Research
-    "https://paperswithcode.com/rss",
-    "https://arxiv.org/rss/cs.CL",
-]
+    "https://arxiv.org/rss/cs.CL": {
+        "category": "Research",
+        "source": "arXiv"
+    },
+    "https://jamesg.blog/hf-papers.xml": {
+        "category": "Research",
+        "source": "Hugging Face Papers"
+    },
+}
 
 def _now():
     return datetime.now(timezone.utc)
@@ -38,9 +83,11 @@ def collect_items():
     """Return list[dict] fresh within 24 h."""
     cutoff = _now() - _DAY
     items = []
-    for url in FEEDS:
+    for url, meta in FEEDS.items():
+        category = meta["category"]
+        src = meta["source"]
         parsed = feedparser.parse(url)
-        src = parsed.feed.get("title", url)
+        # src = parsed.feed.get("title", url)  # Removed per instructions
         for e in parsed.entries:
             ts = _parse_date(e)
             if not ts or ts < cutoff:
@@ -50,6 +97,13 @@ def collect_items():
                 continue
             uid = hashlib.sha1(link.encode()).hexdigest()
             items.append(
-                {"id": uid, "title": title, "link": link, "source": src, "published": ts}
+                {
+                    "id": uid,
+                    "title": title,
+                    "link": link,
+                    "source": src,
+                    "published": ts,
+                    "category": category,
+                }
             )
     return items
