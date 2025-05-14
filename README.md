@@ -2,7 +2,7 @@
 
 A lightweight AI agent that grabs fresh AI-related headlines and posts a daily digest to GitHub Issues.
 
-👉  **Daily digests live in [Issues](https://github.com/nickzren/ai-news-agent/issues).**
+🔔 **Watch this repository** to receive the daily AI news digest email delivered straight to your inbox.
 
 ## Quick start (local)
 
