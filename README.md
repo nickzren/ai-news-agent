@@ -12,3 +12,23 @@ conda activate ai-news-agent
 export PYTHONPATH=src
 python src/main.py
 ```
+
+## Feed configuration
+
+The collector reads RSS feed URLs from `feeds.json` in the project root. The
+file should contain a JSON object where each key is a feed URL and each value
+specifies the `category` and human‑readable `source` name.
+
+Example:
+
+```json
+{
+  "https://openai.com/news/rss.xml": {
+    "category": "Lab Blogs",
+    "source": "OpenAI"
+  }
+}
+```
+
+Feeds defined in this file are used by the collector. If the file is missing or
+invalid, no feeds will be loaded.

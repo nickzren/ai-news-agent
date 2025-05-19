@@ -1,0 +1,58 @@
+{
+  "https://openai.com/news/rss.xml": {
+    "category": "Lab Blogs",
+    "source": "OpenAI"
+  },
+  "https://blog.google/technology/ai/rss/": {
+    "category": "Lab Blogs",
+    "source": "Google"
+  },
+  "https://huggingface.co/blog/feed.xml": {
+    "category": "Lab Blogs",
+    "source": "Hugging Face"
+  },
+  "https://www.technologyreview.com/topic/artificial-intelligence/feed/": {
+    "category": "News & Mags",
+    "source": "MIT Technology Review"
+  },
+  "https://www.wired.com/feed/tag/ai/latest/rss": {
+    "category": "News & Mags",
+    "source": "Wired"
+  },
+  "https://feeds.arstechnica.com/arstechnica/technology-lab": {
+    "category": "News & Mags",
+    "source": "Ars Technica"
+  },
+  "https://techcrunch.com/tag/artificial-intelligence/feed/": {
+    "category": "News & Mags",
+    "source": "TechCrunch"
+  },
+  "https://venturebeat.com/category/ai/feed/": {
+    "category": "News & Mags",
+    "source": "VentureBeat"
+  },
+  "https://thesequence.substack.com/feed": {
+    "category": "Newsletters",
+    "source": "The Sequence"
+  },
+  "https://importai.substack.com/feed": {
+    "category": "Newsletters",
+    "source": "Import AI"
+  },
+  "https://www.latent.space/feed.xml": {
+    "category": "Newsletters",
+    "source": "Latent Space"
+  },
+  "https://aibreakfast.substack.com/feed": {
+    "category": "Newsletters",
+    "source": "AI Breakfast"
+  },
+  "https://arxiv.org/rss/cs.CL": {
+    "category": "Research",
+    "source": "arXiv"
+  },
+  "https://jamesg.blog/hf-papers.xml": {
+    "category": "Research",
+    "source": "Hugging Face Papers"
+  }
+}
