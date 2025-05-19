@@ -1,3 +1,5 @@
+"""Command-line entry point for generating the daily digest."""
+
 from graph import build_graph
 
 if __name__ == "__main__":
