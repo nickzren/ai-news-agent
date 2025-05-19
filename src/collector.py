@@ -86,7 +86,11 @@ def collect_items():
     for url, meta in FEEDS.items():
         category = meta["category"]
         src = meta["source"]
-        parsed = feedparser.parse(url)
+        try:
+            parsed = feedparser.parse(url)
+        except Exception as exc:  # feedparser can raise on bad feeds
+            print(f"⚠️  feed error for {url}: {exc}")
+            continue
         # src = parsed.feed.get("title", url)  # Removed per instructions
         for e in parsed.entries:
             ts = _parse_date(e)
