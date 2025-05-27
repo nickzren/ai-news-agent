@@ -39,7 +39,10 @@ jobs:
           script: |
             const fs = require('fs');
             const today = new Date().toISOString().slice(0,10);
-            const body  = fs.readFileSync('news.md','utf8');
+            let body  = fs.readFileSync('news.md','utf8');
+            if (body.length > 65000) {
+              body = body.slice(0, 65000) + '\n\n*(truncated)*';
+            }
 
             // search for an open digest issue for today
             const { data: issues } = await github.rest.issues.listForRepo({
