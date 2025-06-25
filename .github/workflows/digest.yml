@@ -19,19 +19,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install deps with micromamba
-        uses: mamba-org/setup-micromamba@v1
-        with:
-          environment-file: environment.yml
-          cache-env: true
-          init-shell: bash      # makes "micromamba activate" work
-
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+        
+      - name: Install dependencies
+        run: uv sync
+        
       - name: Build digest with LangGraph
-        shell: bash -l {0}
-        run: |
-          micromamba activate ai-news-agent
-          python src/main.py
+        run: uv run python src/main.py
 
       - name: Create or update issue
         uses: actions/github-script@v7

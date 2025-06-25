@@ -3,11 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# ── Virtual / Conda / Micromamba envs ────────────────────────────
+# ── Virtual environments ─────────────────────────────────────────
 .venv/
 .env/
-.micromamba/
-conda-meta/
+
+# ── uv ───────────────────────────────────────────────────────────
+.python-version
+uv.lock
 
 # ── Build & dist ─────────────────────────────────────────────────
 dist/
