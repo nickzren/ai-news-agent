@@ -1,90 +1,78 @@
 {
   "https://openai.com/news/rss.xml": {
-    "category": "Lab Blogs",
+    "category": "All",
     "source": "OpenAI"
   },
   "https://blog.google/technology/ai/rss/": {
-    "category": "Lab Blogs",
+    "category": "All",
     "source": "Google AI"
   },
   "https://huggingface.co/blog/feed.xml": {
-    "category": "Lab Blogs",
+    "category": "All",
     "source": "Hugging Face"
   },
-  "https://deepmind.google/discover/blog/rss.xml": {
-    "category": "Lab Blogs",
-    "source": "DeepMind"
-  },
   "https://blogs.microsoft.com/ai/feed/": {
-    "category": "Lab Blogs",
+    "category": "All",
     "source": "Microsoft AI"
   },
   "https://www.technologyreview.com/topic/artificial-intelligence/feed/": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "MIT Technology Review"
   },
   "https://www.wired.com/feed/tag/ai/latest/rss": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "Wired"
   },
   "https://feeds.arstechnica.com/arstechnica/technology-lab": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "Ars Technica"
   },
   "https://techcrunch.com/category/artificial-intelligence/feed/": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "TechCrunch"
   },
-  "https://venturebeat.com/ai/feed/": {
-    "category": "News & Mags",
-    "source": "VentureBeat"
-  },
   "https://thegradient.pub/rss/": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "The Gradient"
   },
   "https://thesequence.substack.com/feed": {
-    "category": "Newsletters",
+    "category": "All",
     "source": "The Sequence"
   },
   "https://importai.substack.com/feed": {
-    "category": "Newsletters",
+    "category": "All",
     "source": "Import AI"
   },
   "https://www.latent.space/feed.xml": {
-    "category": "Newsletters",
+    "category": "All",
     "source": "Latent Space"
   },
   "https://aibreakfast.substack.com/feed": {
-    "category": "Newsletters",
+    "category": "All",
     "source": "AI Breakfast"
   },
-  "https://www.deeplearning.ai/the-batch/feed/": {
-    "category": "Newsletters",
-    "source": "The Batch"
-  },
   "https://lilianweng.github.io/posts/index.xml": {
-    "category": "Deep Dives",
+    "category": "All",
     "source": "Lil'Log"
   },
   "https://jalammar.github.io/feed.xml": {
-    "category": "Deep Dives",
+    "category": "All",
     "source": "Jay Alammar"
   },
   "https://sebastianraschka.com/rss_feed.xml": {
-    "category": "Practitioners",
+    "category": "All",
     "source": "Sebastian Raschka"
   },
   "https://simonwillison.net/atom/everything/": {
-    "category": "Practitioners",
+    "category": "All",
     "source": "Simon Willison"
   },
   "https://karpathy.github.io/feed.xml": {
-    "category": "Practitioners",
+    "category": "All",
     "source": "Andrej Karpathy"
   },
   "https://jamesg.blog/hf-papers.xml": {
-    "category": "Research",
+    "category": "All",
     "source": "Hugging Face Papers"
   }
 }

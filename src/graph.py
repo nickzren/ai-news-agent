@@ -1,9 +1,8 @@
-# src/graph.py
 """
 LangGraph pipeline for ai-news-agent
 
 Flow:
-    collect ─▶ filter ─▶ shortify ─▶ render
+    collect ─▶ filter ─▶ categorize ─▶ shortify ─▶ render
 """
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ import os
 from openai import OpenAI
 from pathlib import Path
 from typing import TypedDict, List, Dict
+from collections import defaultdict
 
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph
@@ -32,12 +32,170 @@ class DigestState(TypedDict, total=False):
 # ──────────────────────────────────────────────────────────────
 # 2. Nodes
 def node_collect(state: DigestState) -> DigestState:
-    state["items"] = collect_items()
+    items = collect_items()
+    print(f"📊 Collected {len(items)} items")
+    state["items"] = items
     return state
 
 
 def node_filter(state: DigestState) -> DigestState:
-    state["items"] = deduplicate(state.get("items", []))
+    items = deduplicate(state.get("items", []))
+    
+    # Limit papers to avoid overwhelming the digest
+    paper_count = 0
+    filtered_items = []
+    skipped_papers = 0
+    
+    for item in sorted(items, key=lambda x: x["published"], reverse=True):
+        if "Papers" in item.get("source", "") and paper_count >= 7:
+            print(f"   Skipping paper: {item['title'][:50]}...")
+            skipped_papers += 1
+            continue  # Skip additional papers
+        if "Papers" in item.get("source", ""):
+            paper_count += 1
+        filtered_items.append(item)
+    
+    print(f"📊 After deduplication: {len(items)} items")
+    if skipped_papers > 0:
+        print(f"📊 Skipped {skipped_papers} additional papers (kept top 7)")
+    print(f"📊 After limiting papers: {len(filtered_items)} items")
+    state["items"] = filtered_items
+    return state
+
+
+def node_categorize(state: DigestState) -> DigestState:
+    """
+    Use LLM to categorize items and identify duplicates.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    
+    # If no API key, set default categories
+    if not api_key:
+        print("⚠️  No OPENAI_API_KEY found, using default categorization")
+        for item in state.get("items", []):
+            item["category"] = "AI News"
+        return state
+        
+    if not state.get("items"):
+        print("⚠️  No items to categorize")
+        return state
+    
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        
+        # Create item list for categorization
+        items_text = "\n".join([
+            f"{i+1}. {item['title']} — {item['source']}"
+            for i, item in enumerate(state["items"])
+        ])
+        
+        prompt = f"""Categorize these AI news items.
+
+STEP 1: FIND DUPLICATES
+These are the SAME story if they describe the same event:
+- "Company X wins case" = "Judge rules for Company X" = "Court favors Company X"
+- "Product Y launched" = "Company releases Product Y" = "New Product Y available"
+
+STEP 2: CATEGORIZE using these rules:
+- Policy & Ethics = lawsuits, court, copyright, legal, judge
+- Research & Models = papers, research (ALL "Hugging Face Papers" items)
+- Tools & Applications = launches, releases, new tools, APIs
+- Industry & Business = funding, valuation, $, acquisitions, company news
+- Tutorials & Insights = opinions, how-to, analysis, "should", "killing"
+- Breaking News = ONLY major AI models released TODAY
+
+Items:
+{items_text}
+
+OUTPUT: One line per item. Write ONLY the category name OR write SKIP for duplicates.
+NO NUMBERS. NO PUNCTUATION. Just the category or SKIP.
+
+Example correct output:
+Industry & Business
+SKIP
+Research & Models
+Policy & Ethics"""
+
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        
+        # Parse categorization response
+        response_text = resp.choices[0].message.content.strip()
+        print(f"📊 LLM response preview: {response_text[:200]}...")
+        
+        lines = response_text.split('\n')
+        
+        # Process each line
+        for i, line in enumerate(lines):
+            if i >= len(state["items"]):
+                break
+                
+            # Clean the line - remove numbers, dots, spaces
+            category = line.strip()
+            # Remove leading numbers like "1. " or "1) "
+            category = category.lstrip('0123456789.-) \t')
+            
+            # Handle SKIP
+            if "SKIP" in category.upper():
+                state["items"][i]["skip"] = True
+                state["items"][i]["skip_reason"] = "duplicate"
+                continue
+            
+            # Map exact category names
+            valid_categories = {
+                "breaking news": "Breaking News",
+                "research & models": "Research & Models",
+                "industry & business": "Industry & Business",
+                "tools & applications": "Tools & Applications",
+                "policy & ethics": "Policy & Ethics",
+                "tutorials & insights": "Tutorials & Insights"
+            }
+            
+            # Assign category
+            category_lower = category.lower()
+            if category_lower in valid_categories:
+                state["items"][i]["category"] = valid_categories[category_lower]
+            else:
+                # Default fallback
+                state["items"][i]["category"] = "Industry & Business"
+                print(f"⚠️  No match for '{category}', using Industry & Business")
+                
+        # Remove skipped items
+        original_count = len(state["items"])
+        skipped_items = [item for item in state["items"] if item.get("skip")]
+        state["items"] = [item for item in state["items"] if not item.get("skip")]
+        
+        # Log skipped items
+        if skipped_items:
+            print(f"📊 Skipped items:")
+            for item in skipped_items[:5]:  # Show first 5
+                print(f"   - {item['title'][:60]}... ({item.get('skip_reason', 'duplicate')})")
+            if len(skipped_items) > 5:
+                print(f"   ... and {len(skipped_items) - 5} more")
+        
+        print(f"📊 After categorization: {len(state['items'])} items (skipped {original_count - len(state['items'])})")
+        
+        # Debug: show categories assigned
+        cats = defaultdict(int)
+        for item in state["items"]:
+            cats[item.get("category", "Unknown")] += 1
+        print(f"📊 Category distribution: {dict(cats)}")
+        
+    except Exception as exc:
+        print(f"⚠️  Categorization error: {exc}")
+        import traceback
+        traceback.print_exc()
+        
+        # Set default category on error
+        for item in state.get("items", []):
+            if item.get("category") == "All":
+                item["category"] = "AI News"
+    
     return state
 
 
@@ -48,36 +206,43 @@ def node_shortify(state: DigestState) -> DigestState:
     """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        # running in free mode – nothing to do
+        print("⚠️  No OPENAI_API_KEY found, skipping shortify")
         return state
 
-    model = os.getenv("OPENAI_MODEL")
+    if not state.get("items"):
+        print("⚠️  No items to shortify")
+        return state
 
-    # Create OpenAI client (uses env vars if api_key is None)
-    client = OpenAI(api_key=api_key) if api_key else None
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    client = OpenAI(api_key=api_key)
 
+    shortified_count = 0
     for item in state["items"]:
         prompt = (
             "Rewrite this headline in ≤10 words, keep the core idea:\n"
             f"{item['title']}"
         )
         try:
-            if client:
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=32,
-                    temperature=0.3,
-                )
-                item["title"] = resp.choices[0].message.content.strip()
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=32,
+                temperature=0.3,
+            )
+            item["title"] = resp.choices[0].message.content.strip()
+            shortified_count += 1
         except Exception as exc:
             # fail gracefully – just log & continue
-            print("⚠️  LLM error:", exc)
+            print(f"⚠️  LLM error for item {shortified_count + 1}: {exc}")
+            
+    print(f"📊 Shortified {shortified_count}/{len(state.get('items', []))} items")
     return state
 
 
 def node_render(state: DigestState) -> DigestState:
-    markdown = to_markdown(state.get("items", []))
+    items = state.get("items", [])
+    print(f"📊 Rendering {len(items)} items")
+    markdown = to_markdown(items)
     Path("news.md").write_text(markdown, encoding="utf-8")
     state["markdown"] = markdown
     return state
@@ -90,12 +255,14 @@ def build_graph():
 
     g.add_node("collect", node_collect)
     g.add_node("filter",  node_filter)
+    g.add_node("categorize", node_categorize)
     g.add_node("shortify",   node_shortify)
     g.add_node("render",  node_render)
 
     g.set_entry_point("collect")
     g.add_edge("collect", "filter")
-    g.add_edge("filter",  "shortify")
+    g.add_edge("filter",  "categorize")
+    g.add_edge("categorize", "shortify")
     g.add_edge("shortify",   "render")
 
     return g.compile()
