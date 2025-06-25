@@ -24,6 +24,6 @@ uv run python src/main.py
 
 ## Feed configuration
 
-The collector reads RSS feed URLs from `feeds.json` in the project root. The
+The collector reads RSS feed URLs from [`feeds.json`](feeds.json) in the project root. The
 file should contain a JSON object where each key is a feed URL and each value
 specifies the `category` and human‑readable `source` name.
