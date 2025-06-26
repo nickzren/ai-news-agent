@@ -19,7 +19,6 @@ def to_markdown(items):
         "Research & Models",
         "Policy & Ethics",
         "Tutorials & Insights",
-        "Research Papers",
         "Other"
     ]
     
@@ -27,7 +26,12 @@ def to_markdown(items):
         if cat not in sections:
             continue
         lines.append(f"### {cat}")
-        for i in sections[cat]:
+        
+        # Sort items: first by source (alphabetically), then by date (newest first)
+        sorted_items = sorted(sections[cat], 
+                            key=lambda x: (x['source'], -x['published'].timestamp()))
+        
+        for i in sorted_items:
             title = i["title"].strip()
             lines.append(f"- [{title}]({i['link']}) — {i['source']}")
         lines.append("")  # blank line
