@@ -8,4 +8,22 @@ dependencies = [
     "langgraph>=0.1.0",
     "langchain-core>=0.1.0",
     "openai>=1.0.0",
+    "tenacity>=8.0.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

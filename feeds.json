@@ -1,11 +1,23 @@
 {
   "https://openai.com/news/rss.xml": {
     "category": "All",
-    "source": "OpenAI"
+    "source": "OpenAI News"
+  },
+  "https://openai.com/blog/rss.xml": {
+    "category": "All",
+    "source": "OpenAI Blog"
   },
   "https://blog.google/technology/ai/rss/": {
     "category": "All",
     "source": "Google AI"
+  },
+  "https://research.google/blog/rss/": {
+    "category": "All",
+    "source": "Google Research"
+  },
+  "https://deepmind.google/blog/rss.xml": {
+    "category": "All",
+    "source": "DeepMind"
   },
   "https://huggingface.co/blog/feed.xml": {
     "category": "All",
@@ -23,13 +35,25 @@
     "category": "All",
     "source": "Wired"
   },
-  "https://feeds.arstechnica.com/arstechnica/technology-lab": {
+  "https://arstechnica.com/ai/feed/": {
     "category": "All",
     "source": "Ars Technica"
   },
   "https://techcrunch.com/category/artificial-intelligence/feed/": {
     "category": "All",
     "source": "TechCrunch"
+  },
+  "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml": {
+    "category": "All",
+    "source": "The Verge"
+  },
+  "https://www.theguardian.com/technology/artificialintelligenceai/rss": {
+    "category": "All",
+    "source": "The Guardian"
+  },
+  "https://venturebeat.com/category/ai/feed/": {
+    "category": "All",
+    "source": "VentureBeat"
   },
   "https://thegradient.pub/rss/": {
     "category": "All",
@@ -43,19 +67,15 @@
     "category": "All",
     "source": "Import AI"
   },
-  "https://www.latent.space/feed.xml": {
+  "https://www.latent.space/feed": {
     "category": "All",
     "source": "Latent Space"
-  },
-  "https://aibreakfast.substack.com/feed": {
-    "category": "All",
-    "source": "AI Breakfast"
   },
   "https://lilianweng.github.io/posts/index.xml": {
     "category": "All",
     "source": "Lil'Log"
   },
-  "https://jalammar.github.io/feed.xml": {
+  "https://newsletter.languagemodels.co/feed": {
     "category": "All",
     "source": "Jay Alammar"
   },
@@ -71,8 +91,12 @@
     "category": "All",
     "source": "Andrej Karpathy"
   },
-  "https://jamesg.blog/hf-papers.xml": {
+  "https://pytorch.org/blog/feed.xml": {
     "category": "All",
-    "source": "Hugging Face Papers"
+    "source": "PyTorch"
+  },
+  "https://aihub.org/feed/": {
+    "category": "All",
+    "source": "AIhub"
   }
 }

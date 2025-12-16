@@ -24,9 +24,15 @@ A lightweight AI agent that grabs fresh AI-related headlines and posts a daily d
 pip install uv
 ```
 
-### 2. Run
+### 2. Configure
+
 ```bash
-cd ai-news-agent
+cp .env.example .env
+# Edit .env and add your OPENAI_API_KEY
+```
+
+### 3. Run
+```bash
 uv run python src/main.py
 ```
 
