@@ -3,8 +3,12 @@
 import logging
 import sys
 
-from config import LOG_LEVEL
-from graph import build_graph
+try:
+    from config import LOG_LEVEL
+    from graph import build_graph
+except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+    from .config import LOG_LEVEL
+    from .graph import build_graph
 
 
 def setup_logging():

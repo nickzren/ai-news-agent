@@ -10,31 +10,169 @@ import logging
 import os
 import re
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
-from typing import TypedDict, List, Dict, Any
+from typing import Any, TypedDict
 
 from langgraph.graph import StateGraph
-from openai import OpenAI
-
-from collector import collect_items
-from config import (
-    CATEGORIES,
-    COMPANY_NAMES,
-    DEFAULT_CATEGORY,
-    OPENAI_MODEL,
-    PAPER_LIMIT,
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
 )
-from filterer import deduplicate
-from renderer import to_markdown
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+try:
+    from collector import collect_items
+    from config import (
+        CATEGORIES,
+        COMPANY_NAMES,
+        DIGEST_OUTPUT_FILE,
+        DEFAULT_CATEGORY,
+        OPENAI_MODEL,
+        OPENAI_RETRIES,
+        OPENAI_TIMEOUT_SECONDS,
+        PAPER_LIMIT,
+        SHORTIFY_BATCH_SIZE,
+    )
+    from filterer import deduplicate
+    from renderer import to_markdown
+except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+    from .collector import collect_items
+    from .config import (
+        CATEGORIES,
+        COMPANY_NAMES,
+        DIGEST_OUTPUT_FILE,
+        DEFAULT_CATEGORY,
+        OPENAI_MODEL,
+        OPENAI_RETRIES,
+        OPENAI_TIMEOUT_SECONDS,
+        PAPER_LIMIT,
+        SHORTIFY_BATCH_SIZE,
+    )
+    from .filterer import deduplicate
+    from .renderer import to_markdown
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_output_file(path_value: str) -> Path:
+    output = Path(path_value)
+    if output.is_absolute():
+        return output
+    return (Path(__file__).resolve().parent.parent / output).resolve()
+
+
+_NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
+_DUPLICATE_STOP_WORDS = {
+    "about",
+    "after",
+    "announces",
+    "artificial",
+    "been",
+    "breaking",
+    "from",
+    "have",
+    "into",
+    "launches",
+    "latest",
+    "named",
+    "says",
+    "that",
+    "their",
+    "this",
+    "what",
+    "with",
+    "word",
+    "year",
+}
 
 
 # ──────────────────────────────────────────────────────────────
 # 1. Shared state definition
 class DigestState(TypedDict, total=False):
-    items: List[Dict]  # list of headline dicts
+    items: list[dict[str, Any]]  # list of headline dicts
     markdown: str  # final rendered MD
+
+
+def _log_openai_retry(retry_state) -> None:  # type: ignore[no-untyped-def]
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    logger.warning(
+        "OpenAI request attempt %s failed, retrying: %s",
+        retry_state.attempt_number,
+        exc,
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_openai_client(api_key: str) -> OpenAI:
+    return OpenAI(api_key=api_key, timeout=OPENAI_TIMEOUT_SECONDS)
+
+
+@retry(
+    stop=stop_after_attempt(OPENAI_RETRIES + 1),
+    wait=wait_exponential(multiplier=1, min=1, max=20),
+    retry=retry_if_exception_type(
+        (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
+    ),
+    before_sleep=_log_openai_retry,
+    reraise=True,
+)
+def _chat_completion_text(client: OpenAI, prompt: str) -> str:
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    content = response.choices[0].message.content
+    return content.strip() if content else ""
+
+
+def _strip_line_number(line: str) -> str:
+    return re.sub(r"^\d+[\.\):\-]\s*", "", line).strip()
+
+
+def _significant_tokens(title: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"\b[a-z0-9]+\b", title.lower())
+        if len(token) > 3 and token not in _DUPLICATE_STOP_WORDS
+    }
+
+
+def _mentioned_company(title: str) -> str | None:
+    title_lower = title.lower()
+    for company in COMPANY_NAMES:
+        company_name = str(company)
+        if company_name in title_lower:
+            return company_name
+    return None
+
+
+def _is_high_confidence_duplicate(
+    existing: dict[str, Any],
+    candidate: dict[str, Any],
+) -> bool:
+    existing_tokens = _significant_tokens(existing.get("title", ""))
+    candidate_tokens = _significant_tokens(candidate.get("title", ""))
+    if len(existing_tokens) < 4 or len(candidate_tokens) < 4:
+        return False
+
+    overlap = existing_tokens & candidate_tokens
+    if len(overlap) < 4:
+        return False
+
+    overlap_ratio = len(overlap) / min(len(existing_tokens), len(candidate_tokens))
+    existing_company = _mentioned_company(existing.get("title", ""))
+    candidate_company = _mentioned_company(candidate.get("title", ""))
+
+    if existing_company or candidate_company:
+        if existing_company != candidate_company:
+            return False
+        return overlap_ratio >= 0.8
+
+    return overlap_ratio >= 0.9 and len(overlap) >= 5
 
 
 # ──────────────────────────────────────────────────────────────
@@ -73,7 +211,7 @@ def node_filter(state: DigestState) -> DigestState:
 
 def node_shortify(state: DigestState) -> DigestState:
     """Shorten titles to ≤10 words for cleaner digest and better duplicate detection."""
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
         logger.warning("No OPENAI_API_KEY found, skipping shortify")
         return state
@@ -82,15 +220,12 @@ def node_shortify(state: DigestState) -> DigestState:
         logger.warning("No items to shortify")
         return state
 
-    client = OpenAI(api_key=api_key)
+    client = _get_openai_client(api_key)
     items = state["items"]
-
-    # Batch shortify: process up to 20 items per API call
-    BATCH_SIZE = 20
     shortified_count = 0
 
-    for batch_start in range(0, len(items), BATCH_SIZE):
-        batch = items[batch_start:batch_start + BATCH_SIZE]
+    for batch_start in range(0, len(items), SHORTIFY_BATCH_SIZE):
+        batch = items[batch_start:batch_start + SHORTIFY_BATCH_SIZE]
 
         # Create numbered list of titles
         titles_text = "\n".join([
@@ -107,38 +242,47 @@ Headlines:
 Shortened (one per line, {len(batch)} lines total):"""
 
         try:
-            resp = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = resp.choices[0].message.content
-            response_text = content.strip() if content else ""
-            lines = [line.strip() for line in response_text.split('\n') if line.strip()]
+            response_text = _chat_completion_text(client, prompt)
+            lines = [line.strip() for line in response_text.split("\n") if line.strip()]
 
             # Remove any numbering from response lines (e.g., "1. Title" -> "Title")
-            cleaned_lines = []
-            for line in lines:
-                # Remove leading numbers like "1." or "1:"
-                cleaned = re.sub(r'^\d+[\.\):\-]\s*', '', line)
-                cleaned_lines.append(cleaned)
+            cleaned_lines = [_strip_line_number(line) for line in lines]
 
             # Apply shortened titles
+            if len(cleaned_lines) != len(batch):
+                logger.warning(
+                    "Shortify line mismatch for batch [%s:%s]: expected %s, got %s",
+                    batch_start,
+                    batch_start + len(batch),
+                    len(batch),
+                    len(cleaned_lines),
+                )
+
             for i, item in enumerate(batch):
                 if i < len(cleaned_lines) and cleaned_lines[i]:
                     item["title"] = cleaned_lines[i]
                     shortified_count += 1
                 else:
-                    logger.debug(f"No shortened title for: {item['title'][:50]}")
+                    logger.warning("No shortened title for: %s", item["title"][:80])
 
         except Exception as exc:
-            logger.warning(f"LLM batch error: {exc}")
+            logger.warning(
+                "LLM shortify batch error [%s:%s]: %s",
+                batch_start,
+                batch_start + len(batch),
+                exc,
+            )
 
     logger.info(f"Shortified {shortified_count}/{len(items)} items")
     return state
 
 
-def _fallback_categorize(item: Dict[str, Any]) -> str:
+def _fallback_categorize(item: dict[str, Any]) -> str:
     """Keyword-based fallback categorization."""
+    category_hint = item.get("category")
+    if isinstance(category_hint, str) and category_hint in CATEGORIES:
+        return category_hint
+
     title = item.get("title", "").lower()
     source = item.get("source", "").lower()
 
@@ -165,7 +309,7 @@ def _fallback_categorize(item: Dict[str, Any]) -> str:
 
 def node_categorize(state: DigestState) -> DigestState:
     """Use LLM to categorize items and identify duplicates."""
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
 
     # If no API key, use fallback categorization
     if not api_key:
@@ -179,7 +323,7 @@ def node_categorize(state: DigestState) -> DigestState:
         return state
 
     try:
-        client = OpenAI(api_key=api_key)
+        client = _get_openai_client(api_key)
 
         # Create item list with shortened titles
         items_text = "\n".join([
@@ -213,17 +357,11 @@ For each item, respond with ONLY:
 
 One per line, {len(state['items'])} lines total. Be VERY aggressive marking duplicates."""
 
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
         # Parse categorization response
-        content = resp.choices[0].message.content
-        response_text = content.strip() if content else ""
+        response_text = _chat_completion_text(client, prompt)
         logger.debug("LLM categorization response received")
 
-        lines = [line.strip() for line in response_text.split('\n') if line.strip()]
+        lines = [_strip_line_number(line) for line in response_text.split("\n") if line.strip()]
 
         # Validate response line count
         expected_count = len(state["items"])
@@ -263,59 +401,28 @@ One per line, {len(state['items'])} lines total. Be VERY aggressive marking dupl
                 item["category"] = _fallback_categorize(item)
                 logger.debug(f"Missing LLM response, fallback for: {item['title'][:50]}")
 
-        # Second pass: Additional duplicate detection based on key terms
-        seen_topics: dict[str, int] = {}
-        seen_keywords: dict[str, int] = {}
-
-        for i, item in enumerate(state["items"]):
+        # Second pass: High-confidence duplicate detection only
+        kept_items: list[dict[str, Any]] = []
+        for item in state["items"]:
             if item.get("skip"):
                 continue
 
-            title_lower = item["title"].lower()
-
-            # Check for keyword-based duplicates (e.g., "word of the year", "slop")
-            # Extract significant words for matching
-            words = set(
-                w for w in re.findall(r'\b\w+\b', title_lower)
-                if len(w) > 3 and w not in [
-                    "with", "from", "that", "this", "what", "about", "into",
-                    "have", "been", "will", "would", "could", "should", "their",
-                    "announces", "launches", "says", "year", "word", "named"
-                ]
+            duplicate = any(
+                _is_high_confidence_duplicate(existing, item) for existing in kept_items
             )
+            if duplicate:
+                item["skip"] = True
+                item["skip_reason"] = "high-overlap duplicate"
+                logger.debug("High-overlap duplicate found: %s", item["title"][:80])
+                continue
 
-            # Create a fingerprint from the most distinctive words
-            if len(words) >= 3:
-                # Sort to make fingerprint consistent
-                fingerprint = "_".join(sorted(list(words)[:5]))
-                if fingerprint in seen_keywords:
-                    item["skip"] = True
-                    item["skip_reason"] = "keyword duplicate"
-                    logger.debug(f"Keyword duplicate found: {item['title'][:50]}")
-                    continue
-                seen_keywords[fingerprint] = i
-
-            # Extract company/product names for duplicate detection
-            for company in COMPANY_NAMES:
-                if company in title_lower:
-                    # Create a topic key without common words
-                    key_words = [
-                        w for w in title_lower.split()
-                        if len(w) > 3 and w not in ["with", "from", "announces", "launches", "the", "and"]
-                    ]
-                    topic_key = f"{company}_{'_'.join(sorted(key_words[:3]))}"
-
-                    if topic_key in seen_topics:
-                        item["skip"] = True
-                        item["skip_reason"] = "duplicate topic"
-                        logger.debug(f"Additional duplicate found: {item['title'][:50]}")
-                    else:
-                        seen_topics[topic_key] = i
-                    break
+            kept_items.append(item)
 
         # Third pass: Handle any remaining "All" category items
         for item in state["items"]:
-            if item.get("category") == "All" and not item.get("skip"):
+            if item.get("skip"):
+                continue
+            if item.get("category") == "All" or item.get("category") not in CATEGORIES:
                 item["category"] = _fallback_categorize(item)
                 logger.debug(f"Reassigned 'All' category for: {item['title'][:50]}")
 
@@ -335,7 +442,10 @@ One per line, {len(state['items'])} lines total. Be VERY aggressive marking dupl
         logger.info(f"Category distribution: {dict(cats)}")
 
     except Exception as exc:
-        logger.error(f"Categorization error: {exc}", exc_info=True)
+        logger.error(
+            "Categorization error: %s. Falling back to keyword categorization.",
+            exc,
+        )
 
         # Set fallback categories on error
         for item in state.get("items", []):
@@ -348,7 +458,7 @@ def node_render(state: DigestState) -> DigestState:
     items = state.get("items", [])
     logger.info(f"Rendering {len(items)} items")
     markdown = to_markdown(items)
-    Path("news.md").write_text(markdown, encoding="utf-8")
+    _NEWS_FILE.write_text(markdown, encoding="utf-8")
     state["markdown"] = markdown
     return state
 

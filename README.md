@@ -3,7 +3,6 @@
 [![Daily AI News Digest](https://github.com/nickzren/ai-news-agent/actions/workflows/digest.yml/badge.svg)](https://github.com/nickzren/ai-news-agent/actions/workflows/digest.yml)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-Powered-FF6B6B)](https://github.com/langchain-ai/langgraph)
-[![OpenAI](https://img.shields.io/badge/GPT--5-mini-412991?logo=openai&logoColor=white)](https://openai.com/)
 [![RSS](https://img.shields.io/badge/RSS-Feeds-FFA500?logo=rss&logoColor=white)](feeds.json)
 [![GitHub Issues](https://img.shields.io/badge/Output-GitHub%20Issues-181717?logo=github&logoColor=white)](https://github.com/nickzren/ai-news-agent/issues?q=label%3Aai-digest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -11,6 +10,68 @@
 A lightweight AI agent that grabs fresh AI-related headlines and posts a daily digest to GitHub Issues.
 
 🔔 **Watch this repository** to receive the daily AI news digest email delivered straight to your inbox.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Trigger[Triggers]
+        GH[GitHub Actions<br/>schedule or manual dispatch]
+        LOCAL[Local CLI run<br/>uv run python src/main.py]
+    end
+
+    subgraph App[Application]
+        G[LangGraph]
+        C[node_collect]
+        F[node_filter]
+        S[node_shortify]
+        K[node_categorize]
+        R[node_render]
+        G --> C --> F --> S --> K --> R
+    end
+
+    subgraph In[Inputs]
+        FEEDS[feeds.json]
+        RSS[RSS feed endpoints]
+        CONF[.env + config.py]
+        OAI[OpenAI API]
+    end
+
+    subgraph Out[Outputs]
+        MD[news.md]
+        ISSUE[GitHub Issue<br/>label: ai-digest]
+    end
+
+    GH --> G
+    LOCAL --> G
+    FEEDS --> C
+    RSS --> C
+    CONF --> C
+    CONF --> S
+    CONF --> K
+    OAI --> S
+    OAI --> K
+    R --> MD --> ISSUE
+
+    classDef io fill:#eef7ff,stroke:#1f6feb,stroke-width:1px,color:#0b1f3a;
+    classDef proc fill:#f7f7f7,stroke:#555,stroke-width:1px,color:#111;
+    class FEEDS,RSS,CONF,OAI,MD,ISSUE io;
+    class GH,LOCAL,G,C,F,S,K,R proc;
+```
+
+```mermaid
+flowchart LR
+    C[Collect] --> F[Filter]
+    F --> K1{API key for shortify?}
+    K1 -- Yes --> S[Shortify]
+    K1 -- No --> N1[Skip shortify]
+    S --> K2{API key for categorize?}
+    N1 --> K2
+    K2 -- Yes --> L[LLM Categorize]
+    K2 -- No --> R[Rule Categorize]
+    L --> W[Render + Write news.md]
+    R --> W
+```
 
 ## Prerequisites
 

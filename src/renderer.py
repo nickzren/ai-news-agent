@@ -3,13 +3,17 @@ Markdown renderer for ai-news-agent
 """
 import logging
 from collections import defaultdict
+from typing import Any
 
-from config import CATEGORIES
+try:
+    from config import CATEGORIES
+except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+    from .config import CATEGORIES
 
 logger = logging.getLogger(__name__)
 
 
-def to_markdown(items):
+def to_markdown(items: list[dict[str, Any]]) -> str:
     """Convert items to markdown, sorted by recency within each category."""
     if not items:
         return "_No fresh AI headlines in the last 24 h._"

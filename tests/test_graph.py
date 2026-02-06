@@ -1,5 +1,8 @@
 """Tests for graph module - fallback categorization."""
-from graph import _fallback_categorize
+from datetime import datetime, timezone
+
+import graph
+from graph import _fallback_categorize, _is_high_confidence_duplicate, node_render
 
 
 def test_fallback_categorize_papers_source():
@@ -91,3 +94,48 @@ def test_fallback_categorize_case_insensitive():
 
     item = {"title": "COMPANY RAISES FUNDING", "source": "News"}
     assert _fallback_categorize(item) == "Industry & Business"
+
+
+def test_fallback_categorize_respects_valid_category_hint():
+    """Valid category hints should be preserved."""
+    item = {
+        "title": "Anything",
+        "source": "Unknown",
+        "category": "Tools & Applications",
+    }
+    assert _fallback_categorize(item) == "Tools & Applications"
+
+
+def test_high_confidence_duplicate_requires_strong_overlap():
+    """Very similar headlines should be marked duplicates."""
+    existing = {"title": "OpenAI launches realtime coding assistant for developers"}
+    candidate = {"title": "OpenAI launches realtime coding assistant for enterprise developers"}
+    assert _is_high_confidence_duplicate(existing, candidate)
+
+
+def test_high_confidence_duplicate_avoids_unrelated_company_stories():
+    """Different events for one company should not be merged."""
+    existing = {"title": "Google unveils Gemini 3 model for enterprises"}
+    candidate = {"title": "Google faces antitrust lawsuit in European court"}
+    assert not _is_high_confidence_duplicate(existing, candidate)
+
+
+def test_node_render_writes_to_configured_output(tmp_path, monkeypatch):
+    """Rendered markdown should be written to the configured output path."""
+    output_file = tmp_path / "news.md"
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+    state = {
+        "items": [
+            {
+                "title": "Title",
+                "link": "https://example.com",
+                "source": "Example",
+                "category": "Breaking News",
+                "published": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            }
+        ]
+    }
+
+    result = node_render(state)
+    assert output_file.exists()
+    assert result["markdown"]
