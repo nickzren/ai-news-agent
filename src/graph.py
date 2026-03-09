@@ -1,11 +1,12 @@
 """
-LangGraph pipeline for ai-news-agent
+LangGraph pipeline for ai-news-agent.
 
 Flow:
-    collect ─▶ filter ─▶ shortify ─▶ categorize ─▶ render
+    collect -> filter -> categorize -> render
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -29,13 +30,12 @@ try:
     from config import (
         CATEGORIES,
         COMPANY_NAMES,
-        DIGEST_OUTPUT_FILE,
         DEFAULT_CATEGORY,
+        DIGEST_OUTPUT_FILE,
         OPENAI_MODEL,
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
-        SHORTIFY_BATCH_SIZE,
     )
     from filterer import deduplicate
     from renderer import to_markdown
@@ -44,13 +44,12 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import (
         CATEGORIES,
         COMPANY_NAMES,
-        DIGEST_OUTPUT_FILE,
         DEFAULT_CATEGORY,
+        DIGEST_OUTPUT_FILE,
         OPENAI_MODEL,
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
-        SHORTIFY_BATCH_SIZE,
     )
     from .filterer import deduplicate
     from .renderer import to_markdown
@@ -66,6 +65,7 @@ def _resolve_output_file(path_value: str) -> Path:
 
 
 _NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
+_MAX_PROMPT_SUMMARY_CHARS = 280
 _DUPLICATE_STOP_WORDS = {
     "about",
     "after",
@@ -90,11 +90,15 @@ _DUPLICATE_STOP_WORDS = {
 }
 
 
-# ──────────────────────────────────────────────────────────────
-# 1. Shared state definition
 class DigestState(TypedDict, total=False):
-    items: list[dict[str, Any]]  # list of headline dicts
-    markdown: str  # final rendered MD
+    items: list[dict[str, Any]]
+    markdown: str
+
+
+class ItemMatchData(TypedDict):
+    company: str | None
+    context_tokens: set[str]
+    title_tokens: set[str]
 
 
 def _log_openai_retry(retry_state) -> None:  # type: ignore[no-untyped-def]
@@ -129,16 +133,26 @@ def _chat_completion_text(client: OpenAI, prompt: str) -> str:
     return content.strip() if content else ""
 
 
-def _strip_line_number(line: str) -> str:
-    return re.sub(r"^\d+[\.\):\-]\s*", "", line).strip()
+def _title_for_matching(item: dict[str, Any]) -> str:
+    original_title = str(item.get("original_title", "")).strip()
+    if original_title:
+        return original_title
+    return str(item.get("title", "")).strip()
 
 
-def _significant_tokens(title: str) -> set[str]:
+def _significant_tokens(text: str) -> set[str]:
     return {
         token
-        for token in re.findall(r"\b[a-z0-9]+\b", title.lower())
+        for token in re.findall(r"\b[a-z0-9]+\b", text.lower())
         if len(token) > 3 and token not in _DUPLICATE_STOP_WORDS
     }
+
+
+def _summary_tokens(item: dict[str, Any]) -> set[str]:
+    summary = str(item.get("summary", "")).strip()
+    if not summary:
+        return set()
+    return _significant_tokens(summary)
 
 
 def _mentioned_company(title: str) -> str | None:
@@ -150,12 +164,22 @@ def _mentioned_company(title: str) -> str | None:
     return None
 
 
-def _is_high_confidence_duplicate(
-    existing: dict[str, Any],
-    candidate: dict[str, Any],
+def _build_item_match_data(item: dict[str, Any]) -> ItemMatchData:
+    title = _title_for_matching(item)
+    title_tokens = _significant_tokens(title)
+    return {
+        "company": _mentioned_company(title),
+        "context_tokens": title_tokens | _summary_tokens(item),
+        "title_tokens": title_tokens,
+    }
+
+
+def _is_high_confidence_duplicate_data(
+    existing: ItemMatchData,
+    candidate: ItemMatchData,
 ) -> bool:
-    existing_tokens = _significant_tokens(existing.get("title", ""))
-    candidate_tokens = _significant_tokens(candidate.get("title", ""))
+    existing_tokens = existing["title_tokens"]
+    candidate_tokens = candidate["title_tokens"]
     if len(existing_tokens) < 4 or len(candidate_tokens) < 4:
         return False
 
@@ -164,8 +188,8 @@ def _is_high_confidence_duplicate(
         return False
 
     overlap_ratio = len(overlap) / min(len(existing_tokens), len(candidate_tokens))
-    existing_company = _mentioned_company(existing.get("title", ""))
-    candidate_company = _mentioned_company(candidate.get("title", ""))
+    existing_company = existing["company"]
+    candidate_company = candidate["company"]
 
     if existing_company or candidate_company:
         if existing_company != candidate_company:
@@ -175,122 +199,144 @@ def _is_high_confidence_duplicate(
     return overlap_ratio >= 0.9 and len(overlap) >= 5
 
 
-# ──────────────────────────────────────────────────────────────
-# 2. Nodes
-def node_collect(state: DigestState) -> DigestState:
-    items = collect_items()
-    logger.info(f"Collected {len(items)} items")
-    state["items"] = items
-    return state
+def _is_high_confidence_duplicate(
+    existing: dict[str, Any],
+    candidate: dict[str, Any],
+) -> bool:
+    return _is_high_confidence_duplicate_data(
+        _build_item_match_data(existing),
+        _build_item_match_data(candidate),
+    )
 
 
-def node_filter(state: DigestState) -> DigestState:
-    items = deduplicate(state.get("items", []))
+def _is_candidate_duplicate_data(
+    existing: ItemMatchData,
+    candidate: ItemMatchData,
+) -> bool:
+    if _is_high_confidence_duplicate_data(existing, candidate):
+        return True
 
-    # Limit papers to avoid overwhelming the digest
-    paper_count = 0
-    filtered_items = []
-    skipped_papers = 0
+    existing_title_tokens = existing["title_tokens"]
+    candidate_title_tokens = candidate["title_tokens"]
+    title_overlap = existing_title_tokens & candidate_title_tokens
 
-    for item in sorted(items, key=lambda x: x["published"], reverse=True):
-        if "Papers" in item.get("source", "") and paper_count >= PAPER_LIMIT:
-            logger.debug(f"Skipping paper: {item['title'][:50]}...")
-            skipped_papers += 1
+    if len(title_overlap) >= 3:
+        return True
+
+    existing_company = existing["company"]
+    candidate_company = candidate["company"]
+    if (
+        existing_company
+        and candidate_company
+        and existing_company == candidate_company
+        and len(title_overlap) >= 2
+    ):
+        return True
+
+    existing_context_tokens = existing["context_tokens"]
+    candidate_context_tokens = candidate["context_tokens"]
+    context_overlap = existing_context_tokens & candidate_context_tokens
+
+    return len(title_overlap) >= 2 and len(context_overlap) >= 5
+
+
+def _build_candidate_groups(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if not items:
+        return []
+
+    match_data = [_build_item_match_data(item) for item in items]
+    adjacency = {index: set() for index in range(len(items))}
+    for left_index in range(len(items)):
+        for right_index in range(left_index + 1, len(items)):
+            if _is_candidate_duplicate_data(match_data[left_index], match_data[right_index]):
+                adjacency[left_index].add(right_index)
+                adjacency[right_index].add(left_index)
+
+    groups: list[list[dict[str, Any]]] = []
+    visited: set[int] = set()
+    for index in range(len(items)):
+        if index in visited:
             continue
-        if "Papers" in item.get("source", ""):
-            paper_count += 1
-        filtered_items.append(item)
 
-    logger.info(f"After deduplication: {len(items)} items")
-    if skipped_papers > 0:
-        logger.info(f"Skipped {skipped_papers} additional papers (kept top {PAPER_LIMIT})")
-    logger.info(f"After limiting papers: {len(filtered_items)} items")
-    state["items"] = filtered_items
-    return state
+        stack = [index]
+        component: list[int] = []
+        visited.add(index)
+        while stack:
+            current = stack.pop()
+            component.append(current)
+            for neighbor in adjacency[current]:
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                stack.append(neighbor)
+
+        group = sorted(
+            (items[item_index] for item_index in component),
+            key=lambda item: item["published"],
+            reverse=True,
+        )
+        groups.append(group)
+
+    return sorted(groups, key=lambda group: group[0]["published"], reverse=True)
 
 
-def node_shortify(state: DigestState) -> DigestState:
-    """Shorten titles to ≤10 words for cleaner digest and better duplicate detection."""
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
-    if not api_key:
-        logger.warning("No OPENAI_API_KEY found, skipping shortify")
-        return state
+def _clean_prompt_text(text: str, limit: int) -> str:
+    normalized = " ".join(text.split()).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
 
-    if not state.get("items"):
-        logger.warning("No items to shortify")
-        return state
 
-    client = _get_openai_client(api_key)
-    items = state["items"]
-    shortified_count = 0
+def _extract_json_object(text: str) -> dict[str, Any]:
+    payload = text.strip()
+    if payload.startswith("```"):
+        payload = re.sub(r"^```(?:json)?\s*", "", payload)
+        payload = re.sub(r"\s*```$", "", payload)
 
-    for batch_start in range(0, len(items), SHORTIFY_BATCH_SIZE):
-        batch = items[batch_start:batch_start + SHORTIFY_BATCH_SIZE]
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        start = payload.find("{")
+        end = payload.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        parsed = json.loads(payload[start : end + 1])
 
-        # Create numbered list of titles
-        titles_text = "\n".join([
-            f"{i + 1}. {item['title']}"
-            for i, item in enumerate(batch)
-        ])
+    if not isinstance(parsed, dict):
+        raise ValueError("Expected JSON object from LLM")
+    return parsed
 
-        prompt = f"""Rewrite each headline in ≤10 words, keep the core idea.
-Return one shortened headline per line, in the same order.
 
-Headlines:
-{titles_text}
+def _validate_category(value: Any, item: dict[str, Any]) -> str:
+    category = str(value).strip()
+    if category in CATEGORIES:
+        return category
+    return _fallback_categorize(item)
 
-Shortened (one per line, {len(batch)} lines total):"""
 
-        try:
-            response_text = _chat_completion_text(client, prompt)
-            lines = [line.strip() for line in response_text.split("\n") if line.strip()]
+def _clean_short_title(value: Any, fallback: str) -> str:
+    title = " ".join(str(value).split()).strip()
+    if not title:
+        return fallback
 
-            # Remove any numbering from response lines (e.g., "1. Title" -> "Title")
-            cleaned_lines = [_strip_line_number(line) for line in lines]
-
-            # Apply shortened titles
-            if len(cleaned_lines) != len(batch):
-                logger.warning(
-                    "Shortify line mismatch for batch [%s:%s]: expected %s, got %s",
-                    batch_start,
-                    batch_start + len(batch),
-                    len(batch),
-                    len(cleaned_lines),
-                )
-
-            for i, item in enumerate(batch):
-                if i < len(cleaned_lines) and cleaned_lines[i]:
-                    item["title"] = cleaned_lines[i]
-                    shortified_count += 1
-                else:
-                    logger.warning("No shortened title for: %s", item["title"][:80])
-
-        except Exception as exc:
-            logger.warning(
-                "LLM shortify batch error [%s:%s]: %s",
-                batch_start,
-                batch_start + len(batch),
-                exc,
-            )
-
-    logger.info(f"Shortified {shortified_count}/{len(items)} items")
-    return state
+    words = title.split()
+    if len(words) > 10:
+        title = " ".join(words[:10])
+    return title
 
 
 def _fallback_categorize(item: dict[str, Any]) -> str:
-    """Keyword-based fallback categorization."""
     category_hint = item.get("category")
     if isinstance(category_hint, str) and category_hint in CATEGORIES:
         return category_hint
 
-    title = item.get("title", "").lower()
-    source = item.get("source", "").lower()
+    title = _title_for_matching(item).lower()
+    source = str(item.get("source", "")).lower()
+    source_type = str(item.get("source_type", "")).lower()
 
-    # Source-based categorization first
-    if "papers" in source:
+    if source_type == "paper" or "papers" in source:
         return "Research & Models"
 
-    # Keyword-based categorization
     if any(word in title for word in ["lawsuit", "court", "legal", "copyright", "safety", "regulation", "ban"]):
         return "Policy & Ethics"
     if any(word in title for word in ["paper", "research", "model", "benchmark", "beats", "arxiv", "study"]):
@@ -307,177 +353,293 @@ def _fallback_categorize(item: dict[str, Any]) -> str:
     return str(DEFAULT_CATEGORY)
 
 
-def node_categorize(state: DigestState) -> DigestState:
-    """Use LLM to categorize items and identify duplicates."""
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+def _is_paper_item(item: dict[str, Any]) -> bool:
+    source_type = str(item.get("source_type", "")).lower()
+    if source_type == "paper":
+        return True
+    return "papers" in str(item.get("source", "")).lower()
 
-    # If no API key, use fallback categorization
-    if not api_key:
-        logger.warning("No OPENAI_API_KEY found, using fallback categorization")
-        for item in state.get("items", []):
+
+def _sort_items_by_recency(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(items, key=lambda item: item["published"], reverse=True)
+
+
+def _limit_papers(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    paper_count = 0
+    filtered_items: list[dict[str, Any]] = []
+    skipped_papers = 0
+
+    for item in items:
+        if _is_paper_item(item):
+            if paper_count >= PAPER_LIMIT:
+                skipped_papers += 1
+                continue
+            paper_count += 1
+        filtered_items.append(item)
+
+    return filtered_items, skipped_papers
+
+
+def _fallback_resolve_groups(groups: list[list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], int]:
+    kept_items: list[dict[str, Any]] = []
+    skipped_duplicates = 0
+
+    for group in groups:
+        resolved_group: list[dict[str, Any]] = []
+        resolved_match_data: list[ItemMatchData] = []
+        for item in group:
+            item_match_data = _build_item_match_data(item)
+            if any(
+                _is_high_confidence_duplicate_data(existing_data, item_match_data)
+                for existing_data in resolved_match_data
+            ):
+                skipped_duplicates += 1
+                continue
+
+            item["title"] = _title_for_matching(item)
             item["category"] = _fallback_categorize(item)
-        return state
+            resolved_group.append(item)
+            resolved_match_data.append(item_match_data)
 
-    if not state.get("items"):
+        kept_items.extend(resolved_group)
+
+    return kept_items, skipped_duplicates
+
+
+def _finalize_items(
+    state: DigestState,
+    items: list[dict[str, Any]],
+    skipped_duplicates: int,
+    *,
+    log_label: str,
+) -> DigestState:
+    sorted_items = _sort_items_by_recency(items)
+    final_items, skipped_papers = _limit_papers(sorted_items)
+
+    if skipped_papers:
+        logger.info("Skipped %d additional papers (kept top %d)", skipped_papers, PAPER_LIMIT)
+
+    logger.info(
+        "%s: %d items (skipped %d duplicates)",
+        log_label,
+        len(final_items),
+        skipped_duplicates,
+    )
+
+    categories: dict[str, int] = defaultdict(int)
+    for item in final_items:
+        categories[item.get("category", "Unknown")] += 1
+    logger.info("Category distribution: %s", dict(categories))
+
+    state["items"] = final_items
+    return state
+
+
+def node_collect(state: DigestState) -> DigestState:
+    items = collect_items()
+    logger.info("Collected %d items", len(items))
+    state["items"] = items
+    return state
+
+
+def node_filter(state: DigestState) -> DigestState:
+    items = deduplicate(state.get("items", []))
+    logger.info("After URL deduplication: %d items", len(items))
+    state["items"] = items
+    return state
+
+
+def node_categorize(state: DigestState) -> DigestState:
+    items = state.get("items", [])
+    if not items:
         logger.warning("No items to categorize")
         return state
+
+    groups = _build_candidate_groups(items)
+    ambiguous_groups = [group for group in groups if len(group) > 1]
+    logger.info(
+        "Built %d candidate groups (%d ambiguous)",
+        len(groups),
+        len(ambiguous_groups),
+    )
+
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        logger.warning("No OPENAI_API_KEY found, using local duplicate resolution")
+        resolved_items, skipped_duplicates = _fallback_resolve_groups(groups)
+        return _finalize_items(
+            state,
+            resolved_items,
+            skipped_duplicates,
+            log_label="After categorization",
+        )
 
     try:
         client = _get_openai_client(api_key)
 
-        # Create item list with shortened titles
-        items_text = "\n".join([
-            f"{i + 1}. {item['title']} — {item['source']}"
-            for i, item in enumerate(state["items"])
-        ])
+        prompt_groups: list[dict[str, Any]] = []
+        for group_index, group in enumerate(groups, start=1):
+            group_id = f"g{group_index}"
+            prompt_items: list[dict[str, Any]] = []
+            for item_index, item in enumerate(group, start=1):
+                prompt_id = f"{group_id}i{item_index}"
+                prompt_items.append(
+                    {
+                        "item_id": prompt_id,
+                        "source": item["source"],
+                        "published": item["published"].isoformat(),
+                        "title": _title_for_matching(item),
+                        "summary": _clean_prompt_text(
+                            str(item.get("summary", "")),
+                            _MAX_PROMPT_SUMMARY_CHARS,
+                        ),
+                    }
+                )
+            prompt_groups.append({"group_id": group_id, "items": prompt_items})
 
-        categories_str = "\n".join([f"- {cat}" for cat in CATEGORIES])
+        prompt_payload = json.dumps({"groups": prompt_groups}, ensure_ascii=True)
+        categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
 
-        prompt = f"""Analyze these AI news headlines for duplicates and categorization.
+        prompt = f"""Deduplicate and categorize these AI news RSS items.
 
-CRITICAL DUPLICATE DETECTION:
-Look for stories about the SAME EVENT even if worded differently:
-- "OpenAI launches X" = "X released by OpenAI" = "New X from OpenAI"
-- "Google announces Y" = "Y unveiled by Google" = "Google's new Y"
-- "Model Z beats benchmark" = "Z achieves state-of-art" = "New record by Z"
-- "Company raises $X" = "X funding for Company" = "Company valued at Y"
-- Same paper/research from different sources
+Each group contains possible near-duplicates. Only compare items within the same group.
 
-Mark ALL BUT ONE as SKIP for each duplicate group. Keep the most informative version.
-
-CATEGORIES:
+Rules:
+- If multiple items cover the same event, keep the most informative one.
+- Prefer official or primary sources when they cover the same event as secondary coverage.
+- Preserve distinct stories from the same company.
+- Use the original title and summary to decide duplicates.
+- For each kept item, assign exactly one category from this list:
 {categories_str}
+- For each kept item, provide a short_title of 10 words or fewer.
+- If items in a group are distinct, return separate clusters for them.
 
-Items:
-{items_text}
+Return JSON only with this schema:
+{{
+  "groups": [
+    {{
+      "group_id": "g1",
+      "clusters": [
+        {{
+          "keep_id": "g1i1",
+          "duplicate_ids": ["g1i2"],
+          "category": "Breaking News",
+          "short_title": "Example short title"
+        }}
+      ]
+    }}
+  ]
+}}
 
-For each item, respond with ONLY:
-- The category name (if keeping)
-- SKIP (if duplicate)
+Input JSON:
+{prompt_payload}
+"""
 
-One per line, {len(state['items'])} lines total. Be VERY aggressive marking duplicates."""
-
-        # Parse categorization response
         response_text = _chat_completion_text(client, prompt)
-        logger.debug("LLM categorization response received")
+        response_payload = _extract_json_object(response_text)
+        response_groups = response_payload.get("groups", [])
+        if not isinstance(response_groups, list):
+            raise ValueError("LLM response missing groups list")
 
-        lines = [_strip_line_number(line) for line in response_text.split("\n") if line.strip()]
+        response_group_lookup: dict[str, list[dict[str, Any]]] = {}
+        for response_group in response_groups:
+            if not isinstance(response_group, dict):
+                continue
+            group_id = str(response_group.get("group_id", "")).strip()
+            clusters = response_group.get("clusters", [])
+            if not group_id or not isinstance(clusters, list):
+                continue
+            response_group_lookup[group_id] = [
+                cluster for cluster in clusters if isinstance(cluster, dict)
+            ]
 
-        # Validate response line count
-        expected_count = len(state["items"])
-        actual_count = len(lines)
+        kept_items: list[dict[str, Any]] = []
+        skipped_duplicates = 0
 
-        if actual_count != expected_count:
-            logger.warning(
-                f"LLM response line mismatch: expected {expected_count}, got {actual_count}. "
-                "Using fallback for unmatched items."
-            )
+        for group_index, group in enumerate(groups, start=1):
+            group_id = f"g{group_index}"
+            group_prompt_ids = {
+                f"{group_id}i{item_index}": item
+                for item_index, item in enumerate(group, start=1)
+            }
+            used_ids: set[str] = set()
+            group_clusters = response_group_lookup.get(group_id, [])
 
-        # First pass: LLM categorization
-        for i, item in enumerate(state["items"]):
-            if i < len(lines):
-                line = lines[i]
-
-                # Check for SKIP
-                if "SKIP" in line.upper():
-                    item["skip"] = True
-                    item["skip_reason"] = "duplicate"
+            for cluster in group_clusters:
+                keep_id = str(cluster.get("keep_id", "")).strip()
+                if keep_id not in group_prompt_ids or keep_id in used_ids:
                     continue
 
-                # Check for exact category match
-                category_found = False
-                for valid_cat in CATEGORIES:
-                    if valid_cat.lower() in line.lower():
-                        item["category"] = valid_cat
-                        category_found = True
-                        break
+                duplicate_ids: list[str] = []
+                for raw_duplicate_id in cluster.get("duplicate_ids", []):
+                    duplicate_id = str(raw_duplicate_id).strip()
+                    if (
+                        duplicate_id
+                        and duplicate_id != keep_id
+                        and duplicate_id in group_prompt_ids
+                        and duplicate_id not in used_ids
+                    ):
+                        duplicate_ids.append(duplicate_id)
 
-                # If no valid category found in LLM response, use fallback
-                if not category_found:
-                    item["category"] = _fallback_categorize(item)
-                    logger.debug(f"Fallback categorization for: {item['title'][:50]}")
-            else:
-                # LLM didn't provide enough lines, use fallback
+                keep_item = group_prompt_ids[keep_id]
+                keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
+                keep_item["title"] = _clean_short_title(
+                    cluster.get("short_title"),
+                    _title_for_matching(keep_item),
+                )
+
+                kept_items.append(keep_item)
+                used_ids.add(keep_id)
+                used_ids.update(duplicate_ids)
+                skipped_duplicates += len(duplicate_ids)
+
+            for prompt_id, item in group_prompt_ids.items():
+                if prompt_id in used_ids:
+                    continue
+                item["title"] = _title_for_matching(item)
                 item["category"] = _fallback_categorize(item)
-                logger.debug(f"Missing LLM response, fallback for: {item['title'][:50]}")
+                kept_items.append(item)
 
-        # Second pass: High-confidence duplicate detection only
-        kept_items: list[dict[str, Any]] = []
-        for item in state["items"]:
-            if item.get("skip"):
-                continue
-
-            duplicate = any(
-                _is_high_confidence_duplicate(existing, item) for existing in kept_items
-            )
-            if duplicate:
-                item["skip"] = True
-                item["skip_reason"] = "high-overlap duplicate"
-                logger.debug("High-overlap duplicate found: %s", item["title"][:80])
-                continue
-
-            kept_items.append(item)
-
-        # Third pass: Handle any remaining "All" category items
-        for item in state["items"]:
-            if item.get("skip"):
-                continue
-            if item.get("category") == "All" or item.get("category") not in CATEGORIES:
-                item["category"] = _fallback_categorize(item)
-                logger.debug(f"Reassigned 'All' category for: {item['title'][:50]}")
-
-        # Remove skipped items
-        original_count = len(state["items"])
-        state["items"] = [item for item in state["items"] if not item.get("skip")]
-
-        logger.info(
-            f"After categorization: {len(state['items'])} items "
-            f"(skipped {original_count - len(state['items'])} duplicates)"
+        return _finalize_items(
+            state,
+            kept_items,
+            skipped_duplicates,
+            log_label="After categorization",
         )
-
-        # Debug: show categories assigned
-        cats: dict[str, int] = defaultdict(int)
-        for item in state["items"]:
-            cats[item.get("category", "Unknown")] += 1
-        logger.info(f"Category distribution: {dict(cats)}")
-
     except Exception as exc:
         logger.error(
-            "Categorization error: %s. Falling back to keyword categorization.",
+            "Categorization error: %s. Falling back to local duplicate resolution.",
             exc,
         )
-
-        # Set fallback categories on error
-        for item in state.get("items", []):
-            item["category"] = _fallback_categorize(item)
-
-    return state
+        resolved_items, skipped_duplicates = _fallback_resolve_groups(groups)
+        return _finalize_items(
+            state,
+            resolved_items,
+            skipped_duplicates,
+            log_label="After local categorization",
+        )
 
 
 def node_render(state: DigestState) -> DigestState:
     items = state.get("items", [])
-    logger.info(f"Rendering {len(items)} items")
+    logger.info("Rendering %d items", len(items))
     markdown = to_markdown(items)
     _NEWS_FILE.write_text(markdown, encoding="utf-8")
     state["markdown"] = markdown
     return state
 
 
-# ──────────────────────────────────────────────────────────────
-# 3. Build LangGraph
 def build_graph():
-    g = StateGraph(DigestState)
+    graph = StateGraph(DigestState)
 
-    g.add_node("collect", node_collect)
-    g.add_node("filter", node_filter)
-    g.add_node("shortify", node_shortify)
-    g.add_node("categorize", node_categorize)
-    g.add_node("render", node_render)
+    graph.add_node("collect", node_collect)
+    graph.add_node("filter", node_filter)
+    graph.add_node("categorize", node_categorize)
+    graph.add_node("render", node_render)
 
-    g.set_entry_point("collect")
-    g.add_edge("collect", "filter")
-    g.add_edge("filter", "shortify")
-    g.add_edge("shortify", "categorize")
-    g.add_edge("categorize", "render")
+    graph.set_entry_point("collect")
+    graph.add_edge("collect", "filter")
+    graph.add_edge("filter", "categorize")
+    graph.add_edge("categorize", "render")
 
-    return g.compile()
+    return graph.compile()

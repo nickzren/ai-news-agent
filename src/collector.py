@@ -2,8 +2,10 @@
 RSS feed collector for ai-news-agent
 """
 import calendar
+import html
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.error import URLError
@@ -69,7 +71,13 @@ def _load_feeds() -> dict[str, dict[str, str]]:
             source = urlparse(raw_url).netloc or "Unknown Source"
             logger.warning("Feed %s missing source; using %s", raw_url, source)
 
-        validated[raw_url] = {"source": source, "category": category}
+        source_type = str(raw_meta.get("type", "news")).strip().lower() or "news"
+
+        validated[raw_url] = {
+            "source": source,
+            "category": category,
+            "type": source_type,
+        }
 
     logger.info("Loaded %d valid feeds from feeds.json", len(validated))
     return validated
@@ -85,6 +93,15 @@ def _parse_date(entry: dict[str, Any]) -> datetime | None:
         if tup:
             return datetime.fromtimestamp(calendar.timegm(tup), tz=timezone.utc)
     return None
+
+
+def _clean_summary(value: Any) -> str:
+    if not value:
+        return ""
+
+    text = html.unescape(str(value))
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def normalize_url(url: str) -> str:
@@ -130,7 +147,11 @@ def normalize_url(url: str) -> str:
 def _log_retry(retry_state) -> None:  # type: ignore[no-untyped-def]
     """Log retry attempts."""
     exc = retry_state.outcome.exception() if retry_state.outcome else None
-    logger.warning(f"Fetch attempt {retry_state.attempt_number} failed, retrying: {exc}")
+    logger.warning(
+        "Fetch attempt %s failed, retrying: %s",
+        retry_state.attempt_number,
+        exc,
+    )
 
 
 @retry(
@@ -158,15 +179,16 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
 def _fetch_feed_entries(
     url: str,
     meta: dict[str, str],
-) -> tuple[str, str, list[dict[str, Any]]]:
+) -> tuple[str, str, str, list[dict[str, Any]]]:
     category = meta.get("category", "All")
     src = meta.get("source", urlparse(url).netloc or "Unknown Source")
+    source_type = meta.get("type", "news")
     try:
         logger.info("Fetching %s...", src)
         parsed = _fetch_with_retry(url)
     except Exception as exc:
         logger.error("Feed error for %s: %s", url, exc)
-        return src, category, []
+        return src, category, source_type, []
 
     if parsed.bozo:
         logger.warning(
@@ -177,16 +199,16 @@ def _fetch_feed_entries(
 
     entries = list(parsed.entries) if hasattr(parsed, "entries") else []
     logger.debug("Found %d entries from %s", len(entries), src)
-    return src, category, entries
+    return src, category, source_type, entries
 
 
 def collect_items() -> list[dict[str, Any]]:
     """Return list[dict] fresh within 24 h."""
     cutoff = _now() - _DAY
-    logger.info(f"Collecting items newer than {cutoff}")
+    logger.info("Collecting items newer than %s", cutoff)
     items: list[dict[str, Any]] = []
     feeds = _load_feeds()
-    feed_results: list[tuple[str, str, list[dict[str, Any]]]] = []
+    feed_results: list[tuple[str, str, str, list[dict[str, Any]]]] = []
 
     max_workers = max(1, min(RSS_MAX_WORKERS, len(feeds)))
     if max_workers == 1:
@@ -201,7 +223,7 @@ def collect_items() -> list[dict[str, Any]]:
             for future in as_completed(futures):
                 feed_results.append(future.result())
 
-    for src, category, entries in feed_results:
+    for src, category, source_type, entries in feed_results:
         for e in entries:
             ts = _parse_date(e)
             if not ts:
@@ -216,17 +238,21 @@ def collect_items() -> list[dict[str, Any]]:
 
             # Use normalized URL directly as the dedupe key.
             normalized_link = normalize_url(link)
+            summary = _clean_summary(e.get("summary") or e.get("description") or "")
 
             items.append(
                 {
                     "id": normalized_link,
                     "title": title,
+                    "original_title": title,
                     "link": link,  # Keep original link for display
                     "source": src,
                     "published": ts,
                     "category": category,
+                    "summary": summary,
+                    "source_type": source_type,
                 }
             )
 
-    logger.info(f"Collected {len(items)} total items from all feeds")
+    logger.info("Collected %d total items from all feeds", len(items))
     return items

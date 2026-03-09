@@ -11,6 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import CATEGORIES
 
 logger = logging.getLogger(__name__)
+_CATEGORY_ORDER = [*CATEGORIES, "Other"]
 
 
 def to_markdown(items: list[dict[str, Any]]) -> str:
@@ -29,9 +30,7 @@ def to_markdown(items: list[dict[str, Any]]) -> str:
     lines = ["## Daily AI / LLM Headlines\n"]
 
     # Use categories from config, plus "Other" as fallback
-    category_order = CATEGORIES + ["Other"]
-
-    for cat in category_order:
+    for cat in _CATEGORY_ORDER:
         if cat not in sections:
             continue
         lines.append(f"### {cat}")
