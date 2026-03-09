@@ -9,6 +9,7 @@ from graph import (
     _is_high_confidence_duplicate,
     build_graph,
     node_categorize,
+    node_filter,
     node_render,
 )
 
@@ -186,6 +187,20 @@ def test_build_candidate_groups_clusters_possible_duplicates():
 
     assert [len(group) for group in groups] == [2, 1]
     assert {item["id"] for item in groups[0]} == {"a", "b"}
+
+
+def test_node_filter_removes_noise_titles_and_applies_source_cap(monkeypatch):
+    items = [
+        _item("a", "OpenAI launches new coding agent", 12, source="OpenAI"),
+        _item("b", "Sponsored webinar: build agents faster", 11, source="Vendor"),
+        _item("c", "OpenAI ships upgraded eval tooling", 10, source="OpenAI"),
+        _item("d", "OpenAI adds enterprise controls", 9, source="OpenAI"),
+    ]
+
+    monkeypatch.setattr(graph, "MAX_ITEMS_PER_SOURCE", 2)
+    result = node_filter({"items": items})
+
+    assert [item["id"] for item in result["items"]] == ["a", "c"]
 
 
 def test_node_categorize_uses_structured_llm_response(monkeypatch):

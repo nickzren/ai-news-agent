@@ -1,7 +1,7 @@
 """Tests for filterer module."""
 from datetime import datetime, timezone
 
-from filterer import deduplicate
+from filterer import deduplicate, exclude_noise
 
 
 def test_deduplicate_empty():
@@ -59,3 +59,15 @@ def test_deduplicate_multiple_duplicates():
     result = deduplicate(items)
     assert len(result) == 2
     assert [item["id"] for item in result] == ["b", "a"]
+
+
+def test_exclude_noise_filters_sponsored_titles_and_links():
+    items = [
+        {"title": "Sponsored webinar: build agents", "link": "https://example.com/news/1"},
+        {"title": "Real story", "link": "https://example.com/spons/paid-post"},
+        {"title": "Actual update", "link": "https://example.com/news/2"},
+    ]
+
+    result, skipped = exclude_noise(items)
+    assert skipped == 2
+    assert result == [{"title": "Actual update", "link": "https://example.com/news/2"}]

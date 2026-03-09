@@ -37,6 +37,7 @@ DIGEST_OUTPUT_FILE: str = _get_env_str("DIGEST_OUTPUT_FILE", "news.md")
 
 # ── Feed Limits ─────────────────────────────────────────────────
 PAPER_LIMIT: int = _get_env_int("PAPER_LIMIT", 7)
+MAX_ITEMS_PER_SOURCE: int = _get_env_int("MAX_ITEMS_PER_SOURCE", 6)
 
 # ── RSS Fetch Configuration ─────────────────────────────────────
 RSS_TIMEOUT: int = _get_env_int("RSS_TIMEOUT", 10)

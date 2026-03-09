@@ -112,6 +112,8 @@ An optional `type` field can be used for source-specific handling such as paper 
 Pipeline notes:
 
 - Exact duplicates are removed by normalized URL before any LLM call.
+- Obvious noise titles such as webinars and sponsored posts are dropped before grouping.
+- A per-source cap is applied before LLM dedupe for diversity and lower cost.
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
 - Short display titles are generated only for kept items after duplicates are resolved.

@@ -3,10 +3,6 @@
     "category": "All",
     "source": "OpenAI News"
   },
-  "https://openai.com/blog/rss.xml": {
-    "category": "All",
-    "source": "OpenAI Blog"
-  },
   "https://blog.google/technology/ai/rss/": {
     "category": "All",
     "source": "Google AI"
@@ -31,10 +27,6 @@
     "category": "All",
     "source": "MIT Technology Review"
   },
-  "https://www.wired.com/feed/tag/ai/latest/rss": {
-    "category": "All",
-    "source": "Wired"
-  },
   "https://arstechnica.com/ai/feed/": {
     "category": "All",
     "source": "Ars Technica"
@@ -46,10 +38,6 @@
   "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml": {
     "category": "All",
     "source": "The Verge"
-  },
-  "https://www.theguardian.com/technology/artificialintelligenceai/rss": {
-    "category": "All",
-    "source": "The Guardian"
   },
   "https://venturebeat.com/category/ai/feed/": {
     "category": "All",
@@ -83,10 +71,6 @@
     "category": "All",
     "source": "Sebastian Raschka"
   },
-  "https://simonwillison.net/atom/everything/": {
-    "category": "All",
-    "source": "Simon Willison"
-  },
   "https://karpathy.github.io/feed.xml": {
     "category": "All",
     "source": "Andrej Karpathy"
@@ -94,6 +78,15 @@
   "https://pytorch.org/blog/feed.xml": {
     "category": "All",
     "source": "PyTorch"
+  },
+  "https://machinelearning.apple.com/rss.xml": {
+    "category": "All",
+    "source": "Apple Machine Learning Research",
+    "type": "paper"
+  },
+  "https://aws.amazon.com/blogs/machine-learning/feed/": {
+    "category": "All",
+    "source": "AWS Machine Learning"
   },
   "https://aihub.org/feed/": {
     "category": "All",

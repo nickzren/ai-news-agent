@@ -32,12 +32,13 @@ try:
         COMPANY_NAMES,
         DEFAULT_CATEGORY,
         DIGEST_OUTPUT_FILE,
+        MAX_ITEMS_PER_SOURCE,
         OPENAI_MODEL,
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
     )
-    from filterer import deduplicate
+    from filterer import deduplicate, exclude_noise
     from renderer import to_markdown
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .collector import collect_items
@@ -46,12 +47,13 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         COMPANY_NAMES,
         DEFAULT_CATEGORY,
         DIGEST_OUTPUT_FILE,
+        MAX_ITEMS_PER_SOURCE,
         OPENAI_MODEL,
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
     )
-    from .filterer import deduplicate
+    from .filterer import deduplicate, exclude_noise
     from .renderer import to_markdown
 
 logger = logging.getLogger(__name__)
@@ -364,6 +366,25 @@ def _sort_items_by_recency(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: item["published"], reverse=True)
 
 
+def _apply_source_cap(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    if MAX_ITEMS_PER_SOURCE <= 0:
+        return items, 0
+
+    source_counts: dict[str, int] = defaultdict(int)
+    filtered_items: list[dict[str, Any]] = []
+    skipped_items = 0
+
+    for item in items:
+        source = str(item.get("source", ""))
+        if source_counts[source] >= MAX_ITEMS_PER_SOURCE:
+            skipped_items += 1
+            continue
+        source_counts[source] += 1
+        filtered_items.append(item)
+
+    return filtered_items, skipped_items
+
+
 def _limit_papers(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     paper_count = 0
     filtered_items: list[dict[str, Any]] = []
@@ -445,6 +466,20 @@ def node_collect(state: DigestState) -> DigestState:
 def node_filter(state: DigestState) -> DigestState:
     items = deduplicate(state.get("items", []))
     logger.info("After URL deduplication: %d items", len(items))
+
+    items, skipped_noise = exclude_noise(items)
+    if skipped_noise:
+        logger.info("Skipped %d noise titles", skipped_noise)
+
+    items, skipped_source_cap = _apply_source_cap(items)
+    if skipped_source_cap:
+        logger.info(
+            "Skipped %d items due to source cap (%d/source)",
+            skipped_source_cap,
+            MAX_ITEMS_PER_SOURCE,
+        )
+
+    logger.info("After filtering: %d items", len(items))
     state["items"] = items
     return state
 

@@ -104,6 +104,14 @@ def _clean_summary(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _clean_title(value: Any) -> str:
+    if not value:
+        return ""
+    text = html.unescape(str(value))
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def normalize_url(url: str) -> str:
     """
     Normalize URL to improve duplicate detection.
@@ -232,7 +240,8 @@ def collect_items() -> list[dict[str, Any]]:
             if ts < cutoff:
                 continue
 
-            title, link = e.get("title", "").strip(), e.get("link", "").strip()
+            title = _clean_title(e.get("title", ""))
+            link = str(e.get("link", "")).strip()
             if not (title and link):
                 continue
 
