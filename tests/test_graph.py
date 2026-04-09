@@ -7,7 +7,9 @@ from graph import (
     _build_candidate_groups,
     _fallback_categorize,
     _is_high_confidence_duplicate,
+    apply_decisions_file,
     build_graph,
+    build_candidate_snapshot,
     node_categorize,
     node_filter,
     node_render,
@@ -189,6 +191,32 @@ def test_build_candidate_groups_clusters_possible_duplicates():
     assert {item["id"] for item in groups[0]} == {"a", "b"}
 
 
+def test_build_candidate_snapshot_preserves_group_ids():
+    items = [
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI",
+            summary="Official launch post for the coding assistant",
+        ),
+        _item(
+            "b",
+            "OpenAI releases realtime coding assistant for enterprise developers",
+            11,
+            source="TechCrunch",
+            summary="Coverage of the same OpenAI coding assistant launch",
+        ),
+    ]
+
+    snapshot = build_candidate_snapshot(items)
+
+    assert snapshot["kind"] == "ai-news-agent.candidates"
+    assert snapshot["groups"][0]["group_id"] == "g1"
+    assert [item["item_id"] for item in snapshot["groups"][0]["items"]] == ["g1i1", "g1i2"]
+    assert snapshot["groups"][0]["items"][0]["link"] == "https://example.com/a"
+
+
 def test_node_filter_removes_noise_titles_and_applies_source_cap(monkeypatch):
     items = [
         _item("a", "OpenAI launches new coding agent", 12, source="OpenAI"),
@@ -285,6 +313,79 @@ def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
 
     assert len(result["items"]) == 1
     assert result["items"][0]["title"] == "OpenAI launches realtime coding assistant for developers"
+
+
+def test_apply_decisions_file_renders_from_candidate_snapshot(tmp_path, monkeypatch):
+    items = [
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI",
+            summary="Official launch post for the coding assistant",
+        ),
+        _item(
+            "b",
+            "OpenAI releases realtime coding assistant for enterprise developers",
+            11,
+            source="TechCrunch",
+            summary="Coverage of the same OpenAI coding assistant launch",
+        ),
+        _item(
+            "c",
+            "Anthropic faces Pentagon scrutiny over defense work",
+            9,
+            source="The Guardian",
+        ),
+    ]
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+
+    candidates_file.write_text(
+        json.dumps(build_candidate_snapshot(items)),
+        encoding="utf-8",
+    )
+    decisions_file.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    {
+                        "group_id": "g1",
+                        "clusters": [
+                            {
+                                "keep_id": "g1i1",
+                                "duplicate_ids": ["g1i2"],
+                                "category": "Tools & Applications",
+                                "short_title": "OpenAI launches coding assistant",
+                            }
+                        ],
+                    },
+                    {
+                        "group_id": "g2",
+                        "clusters": [
+                            {
+                                "keep_id": "g2i1",
+                                "duplicate_ids": [],
+                                "category": "Policy & Ethics",
+                                "short_title": "Anthropic faces Pentagon scrutiny",
+                            }
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    result = apply_decisions_file(decisions_file, candidates_file)
+
+    assert [item["title"] for item in result["items"]] == [
+        "OpenAI launches coding assistant",
+        "Anthropic faces Pentagon scrutiny",
+    ]
+    assert output_file.read_text(encoding="utf-8") == result["markdown"]
 
 
 def test_build_graph_renders_empty_digest_when_collection_is_empty(tmp_path, monkeypatch):
