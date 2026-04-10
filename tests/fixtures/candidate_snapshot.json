@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "kind": "ai-news-agent.candidates",
   "categories": [
     "Breaking News",
@@ -23,7 +23,8 @@
           "published": "2026-01-01T12:00:00+00:00",
           "summary": "Official launch post for the coding assistant",
           "category": "All",
-          "source_type": "news"
+          "source_type": "news",
+          "source_role": "primary"
         },
         {
           "item_id": "g1i2",
@@ -35,7 +36,8 @@
           "published": "2026-01-01T11:00:00+00:00",
           "summary": "Coverage of the same OpenAI coding assistant launch",
           "category": "All",
-          "source_type": "news"
+          "source_type": "news",
+          "source_role": "independent_reporting"
         }
       ]
     },
@@ -52,7 +54,8 @@
           "published": "2026-01-01T09:00:00+00:00",
           "summary": "",
           "category": "All",
-          "source_type": "news"
+          "source_type": "news",
+          "source_role": "independent_reporting"
         }
       ]
     }

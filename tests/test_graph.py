@@ -37,6 +37,7 @@ def _item(
     summary: str = "",
     category: str = "All",
     source_type: str = "news",
+    source_role: str = "independent_reporting",
 ) -> dict[str, object]:
     return {
         "id": item_id,
@@ -48,6 +49,7 @@ def _item(
         "category": category,
         "summary": summary,
         "source_type": source_type,
+        "source_role": source_role,
     }
 
 
@@ -203,6 +205,29 @@ def test_build_candidate_groups_clusters_possible_duplicates():
     assert {item["id"] for item in groups[0]} == {"a", "b"}
 
 
+def test_build_candidate_groups_prefers_primary_source_within_group():
+    items = [
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            11,
+            source="OpenAI",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "OpenAI releases realtime coding assistant for enterprise developers",
+            12,
+            source="TechCrunch",
+            source_role="independent_reporting",
+        ),
+    ]
+
+    groups = _build_candidate_groups(items)
+
+    assert [item["id"] for item in groups[0]] == ["a", "b"]
+
+
 def test_build_candidate_snapshot_preserves_group_ids():
     items = [
         _item(
@@ -211,6 +236,7 @@ def test_build_candidate_snapshot_preserves_group_ids():
             12,
             source="OpenAI",
             summary="Official launch post for the coding assistant",
+            source_role="primary",
         ),
         _item(
             "b",
@@ -218,6 +244,7 @@ def test_build_candidate_snapshot_preserves_group_ids():
             11,
             source="TechCrunch",
             summary="Coverage of the same OpenAI coding assistant launch",
+            source_role="independent_reporting",
         ),
     ]
 
@@ -237,6 +264,7 @@ def test_build_candidate_snapshot_matches_contract_fixture():
             12,
             source="OpenAI",
             summary="Official launch post for the coding assistant",
+            source_role="primary",
         ),
         _item(
             "b",
@@ -244,12 +272,14 @@ def test_build_candidate_snapshot_matches_contract_fixture():
             11,
             source="TechCrunch",
             summary="Coverage of the same OpenAI coding assistant launch",
+            source_role="independent_reporting",
         ),
         _item(
             "c",
             "Anthropic faces Pentagon scrutiny over defense work",
             9,
             source="The Guardian",
+            source_role="independent_reporting",
         ),
     ]
 
@@ -273,7 +303,7 @@ def test_node_filter_removes_noise_titles_and_applies_source_cap(monkeypatch):
 
 
 def test_node_categorize_uses_structured_llm_response(monkeypatch):
-    """Structured group output should remove duplicates and shorten kept titles."""
+    """Ambiguous groups should use a dedupe pass followed by enrichment."""
     items = [
         _item(
             "a",
@@ -296,9 +326,7 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
             source="The Guardian",
         ),
     ]
-    response = {
-        "executive_summary": "OpenAI launched a coding assistant. Anthropic faces scrutiny.",
-        "top_stories": ["g1i1"],
+    dedupe_response = {
         "groups": [
             {
                 "group_id": "g1",
@@ -306,35 +334,51 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
                     {
                         "keep_id": "g1i1",
                         "duplicate_ids": ["g1i2"],
-                        "category": "Tools & Applications",
-                        "short_title": "OpenAI launches coding assistant",
-                        "summary_line": "A new AI coding tool could reshape development.",
-                        "tier": "high",
                     }
                 ],
+            }
+        ],
+    }
+    enrichment_response = {
+        "executive_summary": "OpenAI launched a coding assistant. Anthropic faces scrutiny.",
+        "top_stories": ["g1i1"],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Tools & Applications",
+                "short_title": "OpenAI launches coding assistant",
+                "summary_line": "A new AI coding tool could reshape development.",
+                "tier": "high",
             },
             {
-                "group_id": "g2",
-                "clusters": [
-                    {
-                        "keep_id": "g2i1",
-                        "duplicate_ids": [],
-                        "category": "Policy & Ethics",
-                        "short_title": "Anthropic faces Pentagon scrutiny",
-                        "summary_line": "Government oversight is intensifying.",
-                        "tier": "normal",
-                    }
-                ],
+                "item_id": "g2i1",
+                "category": "Policy & Ethics",
+                "short_title": "Anthropic faces Pentagon scrutiny",
+                "summary_line": "Government oversight is intensifying.",
+                "tier": "normal",
             },
         ],
     }
+    prompts: list[str] = []
+    responses = iter([
+        json.dumps(dedupe_response),
+        json.dumps(enrichment_response),
+    ])
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
-    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: json.dumps(response))
+
+    def fake_chat_completion(_client, prompt: str) -> str:
+        prompts.append(prompt)
+        return next(responses)
+
+    monkeypatch.setattr(graph, "_chat_completion_text", fake_chat_completion)
 
     result = node_categorize({"items": items})
 
+    assert len(prompts) == 2
+    assert "Deduplicate these AI news groups." in prompts[0]
+    assert "Enrich these deduplicated AI news items" in prompts[1]
     assert len(result["items"]) == 2
     assert [item["title"] for item in result["items"]] == [
         "OpenAI launches coding assistant",
@@ -351,6 +395,80 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
     assert result["items"][1]["tier"] == "normal"
     assert result["items"][1]["coverage_sources"] == []
     assert result["executive_summary"] == "OpenAI launched a coding assistant. Anthropic faces scrutiny."
+    assert result["top_stories"] == ["g1i1"]
+
+
+def test_node_categorize_skips_dedupe_call_when_no_ambiguous_groups(monkeypatch):
+    items = [
+        _item("a", "OpenAI launches study mode for ChatGPT", 12, source="OpenAI"),
+        _item("b", "Anthropic releases new enterprise controls", 11, source="Anthropic"),
+    ]
+    enrichment_response = {
+        "executive_summary": "OpenAI and Anthropic shipped product updates.",
+        "top_stories": ["g1i1"],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Tools & Applications",
+                "short_title": "OpenAI launches study mode",
+                "summary_line": "ChatGPT gained a new product feature.",
+                "tier": "high",
+            },
+            {
+                "item_id": "g2i1",
+                "category": "Tools & Applications",
+                "short_title": "Anthropic releases controls",
+                "summary_line": "Claude added enterprise admin features.",
+                "tier": "normal",
+            },
+        ],
+    }
+    prompts: list[str] = []
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+
+    def fake_chat_completion(_client, prompt: str) -> str:
+        prompts.append(prompt)
+        return json.dumps(enrichment_response)
+
+    monkeypatch.setattr(graph, "_chat_completion_text", fake_chat_completion)
+
+    result = node_categorize({"items": items})
+
+    assert len(prompts) == 1
+    assert "Enrich these deduplicated AI news items" in prompts[0]
+    assert len(result["items"]) == 2
+
+
+def test_node_categorize_drops_off_topic_items_in_enrichment_response(monkeypatch):
+    items = [
+        _item("a", "OpenAI launches study mode for ChatGPT", 12, source="OpenAI"),
+        _item("b", "Conference discount code ends tonight", 11, source="Newsletter"),
+    ]
+    enrichment_response = {
+        "executive_summary": "OpenAI shipped one notable product update.",
+        "top_stories": ["g1i1"],
+        "off_topic_ids": ["g2i1"],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Tools & Applications",
+                "short_title": "OpenAI launches study mode",
+                "summary_line": "ChatGPT gained a new product feature.",
+                "tier": "high",
+            }
+        ],
+    }
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: json.dumps(enrichment_response))
+
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "OpenAI launches study mode"
     assert result["top_stories"] == ["g1i1"]
 
 
@@ -421,7 +539,41 @@ def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch
             source="The Guardian",
         ),
     ]
-    response = _load_fixture("decisions.json")
+    responses = iter([
+        json.dumps(
+            {
+                "groups": [
+                    {
+                        "group_id": "g1",
+                        "clusters": [
+                            {
+                                "keep_id": "g1i1",
+                                "duplicate_ids": ["g1i2"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "executive_summary": "",
+                "top_stories": [],
+                "items": [
+                    {
+                        "item_id": "g2i1",
+                        "category": "Policy & Ethics",
+                        "short_title": "Anthropic faces Pentagon scrutiny",
+                    },
+                    {
+                        "item_id": "g1i1",
+                        "category": "Tools & Applications",
+                        "short_title": "OpenAI launches coding assistant",
+                    }
+                ],
+            }
+        ),
+    ])
     captured: dict[str, str] = {}
 
     monkeypatch.setenv("OPENAI_API_KEY", "your_api_key_here")
@@ -433,7 +585,7 @@ def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch
         return object()
 
     monkeypatch.setattr(graph, "_get_openai_client", fake_get_openai_client)
-    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: json.dumps(response))
+    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: next(responses))
 
     result = node_categorize({"items": items})
 
@@ -570,6 +722,72 @@ def test_apply_decisions_file_matches_contract_fixtures(tmp_path, monkeypatch):
     assert output_file.read_text(encoding="utf-8") == result["markdown"]
 
 
+def test_apply_decisions_file_respects_off_topic_ids(tmp_path, monkeypatch):
+    items = [
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI",
+            summary="Official launch post for the coding assistant",
+        ),
+        _item(
+            "b",
+            "OpenAI releases realtime coding assistant for enterprise developers",
+            11,
+            source="TechCrunch",
+            summary="Coverage of the same OpenAI coding assistant launch",
+        ),
+        _item(
+            "c",
+            "Conference pass discount ends tonight",
+            9,
+            source="Newsletter",
+        ),
+    ]
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+
+    candidates_file.write_text(
+        json.dumps(build_candidate_snapshot(items)),
+        encoding="utf-8",
+    )
+    decisions_file.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    {
+                        "group_id": "g1",
+                        "off_topic_ids": [],
+                        "clusters": [
+                            {
+                                "keep_id": "g1i1",
+                                "duplicate_ids": ["g1i2"],
+                                "category": "Tools & Applications",
+                                "short_title": "OpenAI launches coding assistant",
+                            }
+                        ],
+                    },
+                    {
+                        "group_id": "g2",
+                        "off_topic_ids": ["g2i1"],
+                        "clusters": [],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    result = apply_decisions_file(decisions_file, candidates_file)
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "OpenAI launches coding assistant"
+    assert output_file.read_text(encoding="utf-8") == result["markdown"]
+
+
 def test_apply_decisions_backward_compat_old_format(tmp_path, monkeypatch):
     """Old-format decisions without new fields should still work with defaults."""
     candidates_file = tmp_path / "digest-candidates.json"
@@ -643,6 +861,148 @@ def test_apply_structured_response_uses_duplicate_summary_when_keep_summary_is_b
 
     assert result["items"][0]["summary_line"] == "Independent reporting explains why the new coding assistant matters."
     assert result["items"][0]["coverage_sources"] == ["TechCrunch"]
+
+
+def test_apply_structured_response_orders_duplicate_fallbacks_by_source_role():
+    state = {"items": [], "executive_summary": "", "top_stories": []}
+    groups = [[
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI News",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "OpenAI launches realtime coding assistant for enterprise developers",
+            11,
+            source="TechCrunch",
+            summary="Independent summary second.",
+            source_role="independent_reporting",
+        ),
+        _item(
+            "c",
+            "OpenAI coding assistant analysis",
+            10,
+            source="Newsletter",
+            summary="Commentary summary first.",
+            source_role="commentary",
+        ),
+    ]]
+    response = {
+        "groups": [
+            {
+                "group_id": "g1",
+                "clusters": [
+                    {
+                        "keep_id": "g1i1",
+                        "duplicate_ids": ["g1i3", "g1i2"],
+                        "category": "Tools & Applications",
+                        "short_title": "OpenAI launches coding assistant",
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = graph._apply_structured_response(state, groups, response, log_label="test")
+
+    assert result["items"][0]["summary_line"] == "Independent summary second."
+    assert result["items"][0]["coverage_sources"] == ["TechCrunch", "Newsletter"]
+
+
+def test_apply_enrichment_response_preserves_seeded_summary_line_when_model_omits_it():
+    item = {
+        "title": "Primary keep",
+        "original_title": "Primary keep",
+        "summary": "",
+        "summary_line": "Independent reporting summary.",
+        "source": "OpenAI News",
+        "source_role": "primary",
+        "_prompt_id": "g1i1",
+        "category": "Industry & Business",
+        "tier": "normal",
+        "coverage_sources": ["TechCrunch"],
+        "published": datetime(2026, 4, 10, tzinfo=timezone.utc),
+        "link": "https://example.com/1",
+    }
+    response = {
+        "executive_summary": "",
+        "top_stories": [],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Tools & Applications",
+                "short_title": "Primary keep",
+            }
+        ],
+    }
+
+    result = graph._apply_enrichment_response(
+        {"items": [], "executive_summary": "", "top_stories": []},
+        [item],
+        response,
+        skipped_items=1,
+        log_label="test",
+    )
+
+    assert result["items"][0]["summary_line"] == "Independent reporting summary."
+
+
+def test_apply_enrichment_response_skips_off_topic_ids():
+    items = [
+        {
+            "title": "Primary keep",
+            "original_title": "Primary keep",
+            "summary": "",
+            "summary_line": "",
+            "source": "OpenAI News",
+            "source_role": "primary",
+            "_prompt_id": "g1i1",
+            "category": "Industry & Business",
+            "tier": "normal",
+            "coverage_sources": [],
+            "published": datetime(2026, 4, 10, tzinfo=timezone.utc),
+            "link": "https://example.com/1",
+        },
+        {
+            "title": "Low-signal item",
+            "original_title": "Low-signal item",
+            "summary": "",
+            "summary_line": "",
+            "source": "Newsletter",
+            "source_role": "commentary",
+            "_prompt_id": "g2i1",
+            "category": "Tutorials & Insights",
+            "tier": "normal",
+            "coverage_sources": [],
+            "published": datetime(2026, 4, 10, tzinfo=timezone.utc),
+            "link": "https://example.com/2",
+        },
+    ]
+    response = {
+        "executive_summary": "",
+        "top_stories": ["g1i1"],
+        "off_topic_ids": ["g2i1"],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Tools & Applications",
+                "short_title": "Primary keep",
+            }
+        ],
+    }
+
+    result = graph._apply_enrichment_response(
+        {"items": [], "executive_summary": "", "top_stories": []},
+        items,
+        response,
+        skipped_items=0,
+        log_label="test",
+    )
+
+    assert [item["title"] for item in result["items"]] == ["Primary keep"]
 
 
 def test_should_retry_openai_error_retries_timeout():

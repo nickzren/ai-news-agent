@@ -140,6 +140,7 @@ Agent decisions should use this JSON shape:
   "groups": [
     {
       "group_id": "g1",
+      "off_topic_ids": [],
       "clusters": [
         {
           "keep_id": "g1i1",
@@ -155,7 +156,11 @@ Agent decisions should use this JSON shape:
 }
 ```
 
+Use `off_topic_ids` to drop low-signal or off-topic items from a group. For singleton groups, set `clusters` to `[]` and list the item id in `off_topic_ids`.
+
 After `--apply-decisions`, the existing issue publishing step can post `news.md` as usual.
+
+The default digest output is compact and title-first. `executive_summary` and `summary_line` are optional enrichment fields; the renderer keeps top stories and category sections skimmable even when those fields are present.
 
 ## Feed configuration
 
@@ -163,14 +168,18 @@ The collector reads RSS feed URLs from [`feeds.json`](feeds.json) in the project
 file should contain a JSON object where each key is a feed URL and each value
 specifies the `category` and human-readable `source` name.
 
-An optional `type` field can be used for source-specific handling such as paper limits:
+Optional fields:
+
+- `type`: source-specific handling such as paper limits
+- `source_role`: source authority for duplicate tie-breaks and ranking. Supported values: `primary`, `independent_reporting`, `commentary`, `community`.
 
 ```json
 {
   "https://example.com/feed.xml": {
     "source": "Example Feed",
     "category": "All",
-    "type": "news"
+    "type": "news",
+    "source_role": "independent_reporting"
   }
 }
 ```

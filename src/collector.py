@@ -37,9 +37,19 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
 logger = logging.getLogger(__name__)
 
 _DAY = timedelta(days=1)
+_VALID_SOURCE_ROLES = frozenset(
+    {"primary", "independent_reporting", "commentary", "community"}
+)
 
 # Location of feeds configuration file (project root)
 _FEEDS_FILE = Path(__file__).resolve().parent.parent / "feeds.json"
+
+
+def _normalize_source_role(value: Any) -> str:
+    source_role = str(value).strip().lower()
+    if source_role in _VALID_SOURCE_ROLES:
+        return source_role
+    return "independent_reporting"
 
 
 def _load_feeds() -> dict[str, dict[str, str]]:
@@ -72,11 +82,13 @@ def _load_feeds() -> dict[str, dict[str, str]]:
             logger.warning("Feed %s missing source; using %s", raw_url, source)
 
         source_type = str(raw_meta.get("type", "news")).strip().lower() or "news"
+        source_role = _normalize_source_role(raw_meta.get("source_role"))
 
         validated[raw_url] = {
             "source": source,
             "category": category,
             "type": source_type,
+            "source_role": source_role,
         }
 
     logger.info("Loaded %d valid feeds from feeds.json", len(validated))
@@ -187,16 +199,17 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
 def _fetch_feed_entries(
     url: str,
     meta: dict[str, str],
-) -> tuple[str, str, str, list[dict[str, Any]]]:
+) -> tuple[str, str, str, str, list[dict[str, Any]]]:
     category = meta.get("category", "All")
     src = meta.get("source", urlparse(url).netloc or "Unknown Source")
     source_type = meta.get("type", "news")
+    source_role = meta.get("source_role", "independent_reporting")
     try:
         logger.info("Fetching %s...", src)
         parsed = _fetch_with_retry(url)
     except Exception as exc:
         logger.error("Feed error for %s: %s", url, exc)
-        return src, category, source_type, []
+        return src, category, source_type, source_role, []
 
     if parsed.bozo:
         logger.warning(
@@ -207,7 +220,7 @@ def _fetch_feed_entries(
 
     entries = list(parsed.entries) if hasattr(parsed, "entries") else []
     logger.debug("Found %d entries from %s", len(entries), src)
-    return src, category, source_type, entries
+    return src, category, source_type, source_role, entries
 
 
 def collect_items() -> list[dict[str, Any]]:
@@ -216,7 +229,7 @@ def collect_items() -> list[dict[str, Any]]:
     logger.info("Collecting items newer than %s", cutoff)
     items: list[dict[str, Any]] = []
     feeds = _load_feeds()
-    feed_results: list[tuple[str, str, str, list[dict[str, Any]]]] = []
+    feed_results: list[tuple[str, str, str, str, list[dict[str, Any]]]] = []
 
     max_workers = max(1, min(RSS_MAX_WORKERS, len(feeds)))
     if max_workers == 1:
@@ -231,7 +244,7 @@ def collect_items() -> list[dict[str, Any]]:
             for future in as_completed(futures):
                 feed_results.append(future.result())
 
-    for src, category, source_type, entries in feed_results:
+    for src, category, source_type, source_role, entries in feed_results:
         for e in entries:
             ts = _parse_date(e)
             if not ts:
@@ -260,6 +273,7 @@ def collect_items() -> list[dict[str, Any]]:
                     "category": category,
                     "summary": summary,
                     "source_type": source_type,
+                    "source_role": source_role,
                 }
             )
 
