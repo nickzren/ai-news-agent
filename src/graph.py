@@ -16,6 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypedDict
 
+from dotenv import dotenv_values
 from langgraph.graph import StateGraph
 from openai import (
     APIConnectionError,
@@ -24,7 +25,7 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 try:
     from collector import collect_items
@@ -33,7 +34,9 @@ try:
         COMPANY_NAMES,
         DEFAULT_CATEGORY,
         DIGEST_OUTPUT_FILE,
+        _ENV_FILE as CONFIG_ENV_FILE,
         MAX_ITEMS_PER_SOURCE,
+        OPENAI_API_KEY as CONFIG_OPENAI_API_KEY,
         OPENAI_MODEL,
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
@@ -48,7 +51,9 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         COMPANY_NAMES,
         DEFAULT_CATEGORY,
         DIGEST_OUTPUT_FILE,
+        _ENV_FILE as CONFIG_ENV_FILE,
         MAX_ITEMS_PER_SOURCE,
+        OPENAI_API_KEY as CONFIG_OPENAI_API_KEY,
         OPENAI_MODEL,
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
@@ -58,6 +63,17 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .renderer import to_markdown
 
 logger = logging.getLogger(__name__)
+_OPENAI_API_KEY_PLACEHOLDERS = {
+    "your_api_key_here",
+    "your_openai_api_key_here",
+    "sk-...",
+    "sk-proj-...",
+}
+_SUMMARY_BOUNDARY_PATTERN = re.compile(r"(?<=[.!?])\s+")
+_SUMMARY_ABBREVIATION_PATTERN = re.compile(
+    r"(?:\b(?:mr|mrs|ms|dr|prof|st|vs|etc|inc|co|corp|ltd|llc|plc|jr|sr|mt|no|fig|dept|est|e\.g|i\.e)\.|(?:[A-Z]\.){2,})$",
+    re.IGNORECASE,
+)
 
 
 def _resolve_output_file(path_value: str) -> Path:
@@ -68,7 +84,7 @@ def _resolve_output_file(path_value: str) -> Path:
 
 
 _NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
-_CANDIDATE_SNAPSHOT_VERSION = 1
+_CANDIDATE_SNAPSHOT_VERSION = 2
 _MAX_PROMPT_SUMMARY_CHARS = 280
 _DUPLICATE_STOP_WORDS = {
     "about",
@@ -97,6 +113,8 @@ _DUPLICATE_STOP_WORDS = {
 class DigestState(TypedDict, total=False):
     items: list[dict[str, Any]]
     markdown: str
+    executive_summary: str
+    top_stories: list[str]
 
 
 class ItemMatchData(TypedDict):
@@ -114,17 +132,66 @@ def _log_openai_retry(retry_state) -> None:  # type: ignore[no-untyped-def]
     )
 
 
+def _is_placeholder_openai_api_key(api_key: str) -> bool:
+    normalized = api_key.strip().strip("\"'").lower()
+    if not normalized:
+        return False
+    if normalized in _OPENAI_API_KEY_PLACEHOLDERS:
+        return True
+    if "your_api" in normalized or "your_openai" in normalized:
+        return True
+    if "changeme" in normalized:
+        return True
+    if "replace" in normalized and "key" in normalized:
+        return True
+    return normalized.endswith("...") and normalized.startswith(("sk-", "sk-proj-"))
+
+
+def _normalize_openai_api_key(api_key: str | None) -> str:
+    if api_key is None:
+        return ""
+    api_key = api_key.strip()
+    if not api_key or _is_placeholder_openai_api_key(api_key):
+        return ""
+    return api_key
+
+
+@lru_cache(maxsize=1)
+def _get_dotenv_openai_api_key() -> str:
+    dotenv_values_map = dotenv_values(CONFIG_ENV_FILE)
+    api_key = dotenv_values_map.get("OPENAI_API_KEY")
+    if not isinstance(api_key, str):
+        return ""
+    return _normalize_openai_api_key(api_key)
+
+
+def _get_openai_api_key() -> str:
+    env_api_key = _normalize_openai_api_key(os.getenv("OPENAI_API_KEY"))
+    if env_api_key:
+        return env_api_key
+    configured_api_key = _normalize_openai_api_key(CONFIG_OPENAI_API_KEY)
+    if configured_api_key:
+        return configured_api_key
+    return _get_dotenv_openai_api_key()
+
+
 @lru_cache(maxsize=1)
 def _get_openai_client(api_key: str) -> OpenAI:
-    return OpenAI(api_key=api_key, timeout=OPENAI_TIMEOUT_SECONDS)
+    return OpenAI(
+        api_key=api_key,
+        timeout=OPENAI_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
+
+
+def _should_retry_openai_error(exc: BaseException) -> bool:
+    return isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError))
 
 
 @retry(
     stop=stop_after_attempt(OPENAI_RETRIES + 1),
     wait=wait_exponential(multiplier=1, min=1, max=20),
-    retry=retry_if_exception_type(
-        (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
-    ),
+    retry=retry_if_exception(_should_retry_openai_error),
     before_sleep=_log_openai_retry,
     reraise=True,
 )
@@ -421,6 +488,38 @@ def _clean_short_title(value: Any, fallback: str) -> str:
     return title
 
 
+def _clean_summary_line(value: Any) -> str:
+    line = " ".join(str(value).split()).strip()
+    if not line:
+        return ""
+    for boundary in _SUMMARY_BOUNDARY_PATTERN.finditer(line):
+        prefix = line[: boundary.start()].rstrip()
+        if not prefix:
+            continue
+        if _SUMMARY_ABBREVIATION_PATTERN.search(prefix):
+            continue
+        if re.search(r"\b\d+\.\d+$", prefix):
+            continue
+        suffix = line[boundary.start() :].lstrip().lstrip("\"'([{")
+        if not suffix or not suffix[0].isalnum():
+            continue
+        line = prefix
+        break
+    return line
+
+
+def _fallback_summary_line(item: dict[str, Any]) -> str:
+    return _clean_summary_line(item.get("summary", ""))
+
+
+def _best_available_summary_line(items: list[dict[str, Any]]) -> str:
+    for item in items:
+        summary_line = _fallback_summary_line(item)
+        if summary_line:
+            return summary_line
+    return ""
+
+
 def _fallback_categorize(item: dict[str, Any]) -> str:
     category_hint = item.get("category")
     if isinstance(category_hint, str) and category_hint in CATEGORIES:
@@ -499,26 +598,68 @@ def _fallback_resolve_groups(groups: list[list[dict[str, Any]]]) -> tuple[list[d
     kept_items: list[dict[str, Any]] = []
     skipped_duplicates = 0
 
-    for group in groups:
+    for group_index, group in enumerate(groups, start=1):
         resolved_group: list[dict[str, Any]] = []
         resolved_match_data: list[ItemMatchData] = []
-        for item in group:
+        for item_index, item in enumerate(group, start=1):
             item_match_data = _build_item_match_data(item)
-            if any(
-                _is_high_confidence_duplicate_data(existing_data, item_match_data)
-                for existing_data in resolved_match_data
-            ):
+            duplicate_index = next(
+                (
+                    idx
+                    for idx, existing_data in enumerate(resolved_match_data)
+                    if _is_high_confidence_duplicate_data(existing_data, item_match_data)
+                ),
+                None,
+            )
+            if duplicate_index is not None:
                 skipped_duplicates += 1
+                existing_item = resolved_group[duplicate_index]
+                if not existing_item.get("summary_line"):
+                    existing_item["summary_line"] = _fallback_summary_line(item)
+                dup_source = str(item.get("source", "")).strip()
+                coverage_sources = existing_item.setdefault("coverage_sources", [])
+                if dup_source and dup_source not in coverage_sources:
+                    coverage_sources.append(dup_source)
                 continue
 
+            item["_prompt_id"] = f"g{group_index}i{item_index}"
             item["title"] = _title_for_matching(item)
             item["category"] = _fallback_categorize(item)
+            item["summary_line"] = _fallback_summary_line(item)
+            item["tier"] = "normal"
+            item["coverage_sources"] = []
             resolved_group.append(item)
             resolved_match_data.append(item_match_data)
 
         kept_items.extend(resolved_group)
 
     return kept_items, skipped_duplicates
+
+
+def _select_top_story_ids(items: list[dict[str, Any]], requested_ids: list[str]) -> list[str]:
+    prompt_id_lookup = {
+        str(item.get("_prompt_id", "")).strip(): item
+        for item in items
+        if str(item.get("_prompt_id", "")).strip()
+    }
+
+    selected_ids: list[str] = []
+    for story_id in requested_ids:
+        if story_id in prompt_id_lookup and story_id not in selected_ids:
+            selected_ids.append(story_id)
+    if selected_ids:
+        return selected_ids[:3]
+
+    ranked_items = sorted(
+        prompt_id_lookup.values(),
+        key=lambda item: (
+            -(1 if item.get("tier") == "high" else 0),
+            -len(item.get("coverage_sources", [])),
+            -item["published"].timestamp(),
+            str(item.get("source", "")),
+        ),
+    )
+    return [str(item["_prompt_id"]) for item in ranked_items[:3]]
 
 
 def _finalize_items(
@@ -546,6 +687,10 @@ def _finalize_items(
         categories[item.get("category", "Unknown")] += 1
     logger.info("Category distribution: %s", dict(categories))
 
+    requested_top_stories = state.get("top_stories", [])
+    if not isinstance(requested_top_stories, list):
+        requested_top_stories = []
+    state["top_stories"] = _select_top_story_ids(final_items, requested_top_stories)
     state["items"] = final_items
     return state
 
@@ -560,6 +705,12 @@ def _apply_structured_response(
     response_groups = response_payload.get("groups", [])
     if not isinstance(response_groups, list):
         raise ValueError("LLM response missing groups list")
+
+    executive_summary = str(response_payload.get("executive_summary", "")).strip()
+    raw_top_stories = response_payload.get("top_stories", [])
+    if not isinstance(raw_top_stories, list):
+        raw_top_stories = []
+    top_story_ids = [str(s).strip() for s in raw_top_stories if isinstance(s, str)]
 
     response_group_lookup: dict[str, list[dict[str, Any]]] = {}
     for response_group in response_groups:
@@ -602,11 +753,26 @@ def _apply_structured_response(
                     duplicate_ids.append(duplicate_id)
 
             keep_item = group_prompt_ids[keep_id]
+            duplicate_items = [group_prompt_ids[dup_id] for dup_id in duplicate_ids]
             keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
             keep_item["title"] = _clean_short_title(
                 cluster.get("short_title"),
                 _title_for_matching(keep_item),
             )
+            keep_item["_prompt_id"] = keep_id
+            keep_item["summary_line"] = (
+                _clean_summary_line(cluster.get("summary_line", ""))
+                or _best_available_summary_line([keep_item, *duplicate_items])
+            )
+            raw_tier = str(cluster.get("tier", "normal")).strip().lower()
+            keep_item["tier"] = raw_tier if raw_tier in ("high", "normal") else "normal"
+
+            coverage_sources: list[str] = []
+            for dup_id in duplicate_ids:
+                dup_source = str(group_prompt_ids[dup_id].get("source", "")).strip()
+                if dup_source and dup_source not in coverage_sources:
+                    coverage_sources.append(dup_source)
+            keep_item["coverage_sources"] = coverage_sources
 
             kept_items.append(keep_item)
             used_ids.add(keep_id)
@@ -618,8 +784,14 @@ def _apply_structured_response(
                 continue
             item["title"] = _title_for_matching(item)
             item["category"] = _fallback_categorize(item)
+            item["_prompt_id"] = prompt_id
+            item["summary_line"] = _fallback_summary_line(item)
+            item["tier"] = "normal"
+            item["coverage_sources"] = []
             kept_items.append(item)
 
+    state["executive_summary"] = executive_summary
+    state["top_stories"] = top_story_ids
     return _finalize_items(
         state,
         kept_items,
@@ -703,10 +875,12 @@ def node_categorize(state: DigestState) -> DigestState:
         len(ambiguous_groups),
     )
 
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    api_key = _get_openai_api_key()
     if not api_key:
-        logger.warning("No OPENAI_API_KEY found, using local duplicate resolution")
+        logger.warning("No valid OPENAI_API_KEY found, using local duplicate resolution")
         resolved_items, skipped_duplicates = _fallback_resolve_groups(groups)
+        state["executive_summary"] = ""
+        state["top_stories"] = []
         return _finalize_items(
             state,
             resolved_items,
@@ -735,10 +909,16 @@ Rules:
 - For each kept item, assign exactly one category from this list:
 {categories_str}
 - For each kept item, provide a short_title of 10 words or fewer.
+- For each kept item, provide a summary_line: one plain-English sentence explaining why a general reader should care about this story.
+- For each kept item, assign a tier: "high" if the story has broad impact, strong novelty, solid evidence, or high practical relevance; otherwise "normal".
 - If items in a group are distinct, return separate clusters for them.
+- After processing all groups, write an executive_summary: 2-3 sentences capturing the day's most important AI themes.
+- Pick up to 3 most significant item_ids as top_stories, drawn from high-tier items when possible.
 
 Return JSON only with this schema:
 {{
+  "executive_summary": "2-3 sentence overview of today's AI news.",
+  "top_stories": ["g1i1", "g3i2", "g5i1"],
   "groups": [
     {{
       "group_id": "g1",
@@ -747,7 +927,9 @@ Return JSON only with this schema:
           "keep_id": "g1i1",
           "duplicate_ids": ["g1i2"],
           "category": "Breaking News",
-          "short_title": "Example short title"
+          "short_title": "Example short title",
+          "summary_line": "Why this matters in one sentence.",
+          "tier": "high"
         }}
       ]
     }}
@@ -772,6 +954,8 @@ Input JSON:
             exc,
         )
         resolved_items, skipped_duplicates = _fallback_resolve_groups(groups)
+        state["executive_summary"] = ""
+        state["top_stories"] = []
         return _finalize_items(
             state,
             resolved_items,
@@ -783,7 +967,11 @@ Input JSON:
 def node_render(state: DigestState) -> DigestState:
     items = state.get("items", [])
     logger.info("Rendering %d items", len(items))
-    markdown = to_markdown(items)
+    markdown = to_markdown(
+        items,
+        executive_summary=state.get("executive_summary", ""),
+        top_stories=state.get("top_stories", []),
+    )
     _NEWS_FILE.write_text(markdown, encoding="utf-8")
     state["markdown"] = markdown
     return state

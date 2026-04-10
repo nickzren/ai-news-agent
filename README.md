@@ -12,6 +12,7 @@ A lightweight AI agent that grabs fresh AI-related headlines and posts a daily d
 🔔 **Watch this repository** to receive the daily AI news digest email delivered straight to your inbox.
 
 Scheduled runs check for today's digest issue before calling the LLM, so fallback CI skips duplicate builds.
+Push and pull request CI runs `pytest` and `mypy`.
 
 ## Architecture
 
@@ -134,6 +135,8 @@ Agent decisions should use this JSON shape:
 
 ```json
 {
+  "executive_summary": "2-3 sentence overview of today's AI news.",
+  "top_stories": ["g1i1"],
   "groups": [
     {
       "group_id": "g1",
@@ -142,7 +145,9 @@ Agent decisions should use this JSON shape:
           "keep_id": "g1i1",
           "duplicate_ids": ["g1i2"],
           "category": "Tools & Applications",
-          "short_title": "OpenAI launches coding assistant"
+          "short_title": "OpenAI launches coding assistant",
+          "summary_line": "Why this matters in one sentence.",
+          "tier": "high"
         }
       ]
     }
