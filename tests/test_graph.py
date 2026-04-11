@@ -28,6 +28,10 @@ def _load_fixture(name: str) -> dict[str, object]:
     return json.loads((_FIXTURES_DIR / name).read_text(encoding="utf-8"))
 
 
+def _load_text_fixture(name: str) -> str:
+    return (_FIXTURES_DIR / name).read_text(encoding="utf-8")
+
+
 def _item(
     item_id: str,
     title: str,
@@ -38,6 +42,7 @@ def _item(
     category: str = "All",
     source_type: str = "news",
     source_role: str = "independent_reporting",
+    feed_mode: str = "core",
 ) -> dict[str, object]:
     return {
         "id": item_id,
@@ -50,6 +55,7 @@ def _item(
         "summary": summary,
         "source_type": source_type,
         "source_role": source_role,
+        "feed_mode": feed_mode,
     }
 
 
@@ -280,6 +286,7 @@ def test_build_candidate_snapshot_matches_contract_fixture():
             9,
             source="The Guardian",
             source_role="independent_reporting",
+            feed_mode="discovery_only",
         ),
     ]
 
@@ -300,6 +307,105 @@ def test_node_filter_removes_noise_titles_and_applies_source_cap(monkeypatch):
     result = node_filter({"items": items})
 
     assert [item["id"] for item in result["items"]] == ["a", "c"]
+
+
+def test_node_categorize_drops_discovery_only_singletons(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "NotebookLM workflow tips for teams",
+            11,
+            source="Import AI",
+            source_role="commentary",
+            feed_mode="discovery_only",
+        ),
+    ]
+
+    monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
+    result = node_categorize({"items": items})
+
+    assert [item["id"] for item in result["items"]] == ["a"]
+
+
+def test_node_categorize_keeps_core_item_when_discovery_duplicate_exists(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI",
+            summary="Official launch post for the coding assistant",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "OpenAI launches realtime coding assistant for developers",
+            11,
+            source="Simon Willison",
+            summary="Commentary on the same coding assistant launch",
+            source_role="commentary",
+            feed_mode="discovery_only",
+        ),
+    ]
+
+    monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["source"] == "OpenAI"
+    assert result["items"][0]["coverage_sources"] == ["Simon Willison"]
+
+
+def test_apply_dedupe_response_promotes_core_item_over_discovery_keep():
+    indexed_groups = [(
+        1,
+        [
+            _item(
+                "a",
+                "OpenAI launches realtime coding assistant for developers",
+                12,
+                source="OpenAI",
+                source_role="primary",
+            ),
+            _item(
+                "b",
+                "OpenAI launches realtime coding assistant for developers",
+                11,
+                source="Simon Willison",
+                source_role="commentary",
+                feed_mode="discovery_only",
+            ),
+        ],
+    )]
+    response = {
+        "groups": [
+            {
+                "group_id": "g1",
+                "clusters": [
+                    {
+                        "keep_id": "g1i2",
+                        "duplicate_ids": ["g1i1"],
+                    }
+                ],
+            }
+        ]
+    }
+
+    items, skipped = graph._apply_dedupe_response(indexed_groups, response)
+
+    assert skipped == 1
+    assert len(items) == 1
+    assert items[0]["source"] == "OpenAI"
+    assert items[0]["feed_mode"] == "core"
+    assert items[0]["_prompt_id"] == "g1i1"
+    assert items[0]["coverage_sources"] == ["Simon Willison"]
 
 
 def test_node_categorize_uses_structured_llm_response(monkeypatch):
@@ -516,6 +622,114 @@ def test_node_categorize_without_api_key_uses_duplicate_summary_when_primary_is_
     assert result["items"][0]["coverage_sources"] == ["TechCrunch"]
 
 
+def test_no_key_full_pipeline_matches_golden_fixture(tmp_path, monkeypatch):
+    output_file = tmp_path / "news.md"
+    items = [
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI",
+            source_role="primary",
+            summary="Official launch post for the coding assistant.",
+        ),
+        _item(
+            "b",
+            "OpenAI launches realtime coding assistant for enterprise developers",
+            11,
+            source="TechCrunch",
+            source_role="independent_reporting",
+            summary="Independent reporting on the same coding assistant launch.",
+        ),
+        _item(
+            "c",
+            "Anthropic faces lawsuit over defense work",
+            10,
+            source="Ars Technica",
+            source_role="independent_reporting",
+        ),
+        _item(
+            "d",
+            "Microsoft releases Copilot vision API for Windows developers",
+            9,
+            source="Microsoft AI",
+            source_role="primary",
+        ),
+        _item(
+            "e",
+            "Databricks raises $200 million for AI infrastructure",
+            8,
+            source="VentureBeat",
+            source_role="independent_reporting",
+        ),
+        _item(
+            "f",
+            "ChatGPT voice mode is a weaker model",
+            7,
+            source="Simon Willison",
+            source_role="commentary",
+            feed_mode="discovery_only",
+        ),
+    ]
+
+    monkeypatch.setattr(graph, "collect_items", lambda: items)
+    monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    result = build_graph().invoke({})
+
+    expected_markdown = _load_text_fixture("no_key_digest.md")
+    assert result["markdown"] == expected_markdown
+    assert output_file.read_text(encoding="utf-8") == expected_markdown
+
+
+def test_select_top_story_ids_prefers_category_diversity_without_requested_ids():
+    items = [
+        {
+            "_prompt_id": "g1i1",
+            "title": "Policy story",
+            "category": "Policy & Ethics",
+            "tier": "normal",
+            "source_role": "independent_reporting",
+            "feed_mode": "core",
+            "coverage_sources": [],
+            "published": datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+        },
+        {
+            "_prompt_id": "g1i2",
+            "title": "Industry story A",
+            "category": "Industry & Business",
+            "tier": "normal",
+            "source_role": "independent_reporting",
+            "feed_mode": "core",
+            "coverage_sources": [],
+            "published": datetime(2026, 1, 1, 11, 0, tzinfo=timezone.utc),
+        },
+        {
+            "_prompt_id": "g1i3",
+            "title": "Industry story B",
+            "category": "Industry & Business",
+            "tier": "normal",
+            "source_role": "independent_reporting",
+            "feed_mode": "core",
+            "coverage_sources": [],
+            "published": datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        },
+        {
+            "_prompt_id": "g1i4",
+            "title": "Tool story",
+            "category": "Tools & Applications",
+            "tier": "normal",
+            "source_role": "independent_reporting",
+            "feed_mode": "core",
+            "coverage_sources": [],
+            "published": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
+        },
+    ]
+
+    assert graph._select_top_story_ids(items, []) == ["g1i1", "g1i2", "g1i4"]
+
+
 def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch):
     items = [
         _item(
@@ -706,19 +920,15 @@ def test_apply_decisions_file_matches_contract_fixtures(tmp_path, monkeypatch):
 
     result = apply_decisions_file(decisions_file, candidates_file)
 
-    assert [item["title"] for item in result["items"]] == [
-        "OpenAI launches coding assistant",
-        "Anthropic faces Pentagon scrutiny",
-    ]
+    assert [item["title"] for item in result["items"]] == ["OpenAI launches coding assistant"]
     assert [item["category"] for item in result["items"]] == [
         "Tools & Applications",
-        "Policy & Ethics",
     ]
     assert result["items"][0]["summary_line"] == "A new AI coding tool could reshape how developers write software."
     assert result["items"][0]["tier"] == "high"
     assert result["items"][0]["coverage_sources"] == ["TechCrunch"]
-    assert result["executive_summary"] == "OpenAI launched a new coding assistant while Anthropic faces scrutiny over its defense work."
-    assert result["top_stories"] == ["g1i1", "g2i1"]
+    assert result["executive_summary"] == "OpenAI launched a new coding assistant for developers."
+    assert result["top_stories"] == ["g1i1"]
     assert output_file.read_text(encoding="utf-8") == result["markdown"]
 
 
@@ -826,7 +1036,7 @@ def test_apply_decisions_backward_compat_old_format(tmp_path, monkeypatch):
     assert result["items"][0]["tier"] == "normal"
     assert result["items"][0]["coverage_sources"] == ["TechCrunch"]
     assert result.get("executive_summary") == ""
-    assert result.get("top_stories") == ["g1i1", "g2i1"]
+    assert result.get("top_stories") == ["g1i1"]
 
 
 def test_apply_structured_response_uses_duplicate_summary_when_keep_summary_is_blank():
@@ -910,6 +1120,52 @@ def test_apply_structured_response_orders_duplicate_fallbacks_by_source_role():
 
     assert result["items"][0]["summary_line"] == "Independent summary second."
     assert result["items"][0]["coverage_sources"] == ["TechCrunch", "Newsletter"]
+
+
+def test_apply_structured_response_promotes_core_item_over_discovery_keep():
+    state = {"items": [], "executive_summary": "", "top_stories": []}
+    groups = [[
+        _item(
+            "a",
+            "OpenAI launches realtime coding assistant for developers",
+            12,
+            source="OpenAI",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "OpenAI launches realtime coding assistant for developers",
+            11,
+            source="Simon Willison",
+            source_role="commentary",
+            feed_mode="discovery_only",
+        ),
+    ]]
+    response = {
+        "top_stories": ["g1i2"],
+        "groups": [
+            {
+                "group_id": "g1",
+                "clusters": [
+                    {
+                        "keep_id": "g1i2",
+                        "duplicate_ids": ["g1i1"],
+                        "category": "Tools & Applications",
+                        "short_title": "OpenAI launches coding assistant",
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = graph._apply_structured_response(state, groups, response, log_label="test")
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["source"] == "OpenAI"
+    assert result["items"][0]["feed_mode"] == "core"
+    assert result["items"][0]["_prompt_id"] == "g1i1"
+    assert result["items"][0]["coverage_sources"] == ["Simon Willison"]
+    assert result["top_stories"] == ["g1i1"]
 
 
 def test_apply_enrichment_response_preserves_seeded_summary_line_when_model_omits_it():

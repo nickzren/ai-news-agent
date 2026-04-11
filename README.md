@@ -172,6 +172,7 @@ Optional fields:
 
 - `type`: source-specific handling such as paper limits
 - `source_role`: source authority for duplicate tie-breaks and ranking. Supported values: `primary`, `independent_reporting`, `commentary`, `community`.
+- `feed_mode`: whether a feed is part of the main digest or supporting discovery only. Supported values: `core`, `discovery_only`.
 
 ```json
 {
@@ -179,7 +180,8 @@ Optional fields:
     "source": "Example Feed",
     "category": "All",
     "type": "news",
-    "source_role": "independent_reporting"
+    "source_role": "independent_reporting",
+    "feed_mode": "core"
   }
 }
 ```
@@ -187,8 +189,12 @@ Optional fields:
 Pipeline notes:
 
 - Exact duplicates are removed by normalized URL before any LLM call.
-- Obvious noise titles such as webinars and sponsored posts are dropped before grouping.
+- Source-specific low-signal items such as webinars, sponsored posts, Academy tutorials, and event promos are dropped before grouping.
+- Podcast-style discussion posts from broad news feeds are also filtered before grouping.
+- Broad mixed-source feeds can also be gated by source-specific title rules before grouping.
 - A per-source cap is applied before LLM dedupe for diversity and lower cost.
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
+- `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
+- When fallback top stories are auto-selected, the digest prefers category diversity before repeating the same lane.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
 - Short display titles are generated only for kept items after duplicates are resolved.

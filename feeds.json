@@ -29,6 +29,11 @@
     "source": "Microsoft AI",
     "source_role": "primary"
   },
+  "https://about.fb.com/news/tag/ai/feed/": {
+    "category": "All",
+    "source": "Meta AI",
+    "source_role": "primary"
+  },
   "https://www.technologyreview.com/topic/artificial-intelligence/feed/": {
     "category": "All",
     "source": "MIT Technology Review",
@@ -54,25 +59,34 @@
     "source": "VentureBeat",
     "source_role": "independent_reporting"
   },
+  "https://www.wired.com/feed/tag/ai/latest/rss": {
+    "category": "All",
+    "source": "Wired AI",
+    "source_role": "independent_reporting"
+  },
   "https://thegradient.pub/rss/": {
     "category": "All",
     "source": "The Gradient",
-    "source_role": "commentary"
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://thesequence.substack.com/feed": {
     "category": "All",
     "source": "The Sequence",
-    "source_role": "commentary"
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://importai.substack.com/feed": {
     "category": "All",
     "source": "Import AI",
-    "source_role": "commentary"
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://www.latent.space/feed": {
     "category": "All",
     "source": "Latent Space",
-    "source_role": "commentary"
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://lilianweng.github.io/posts/index.xml": {
     "category": "All",
@@ -82,17 +96,25 @@
   "https://newsletter.languagemodels.co/feed": {
     "category": "All",
     "source": "Jay Alammar",
-    "source_role": "commentary"
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://sebastianraschka.com/rss_feed.xml": {
     "category": "All",
     "source": "Sebastian Raschka",
-    "source_role": "commentary"
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://karpathy.github.io/feed.xml": {
     "category": "All",
     "source": "Andrej Karpathy",
     "source_role": "commentary"
+  },
+  "https://simonwillison.net/atom/everything/": {
+    "category": "All",
+    "source": "Simon Willison",
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://pytorch.org/blog/feed.xml": {
     "category": "All",
@@ -113,6 +135,7 @@
   "https://aihub.org/feed/": {
     "category": "All",
     "source": "AIhub",
-    "source_role": "commentary"
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   }
 }

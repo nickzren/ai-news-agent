@@ -1,6 +1,6 @@
 {
-  "executive_summary": "OpenAI launched a new coding assistant while Anthropic faces scrutiny over its defense work.",
-  "top_stories": ["g1i1", "g2i1"],
+  "executive_summary": "OpenAI launched a new coding assistant for developers.",
+  "top_stories": ["g1i1"],
   "groups": [
     {
       "group_id": "g1",
@@ -19,16 +19,8 @@
     },
     {
       "group_id": "g2",
-      "clusters": [
-        {
-          "keep_id": "g2i1",
-          "duplicate_ids": [],
-          "category": "Policy & Ethics",
-          "short_title": "Anthropic faces Pentagon scrutiny",
-          "summary_line": "Government oversight of AI companies working with defense is intensifying.",
-          "tier": "high"
-        }
-      ]
+      "off_topic_ids": ["g2i1"],
+      "clusters": []
     }
   ]
 }
