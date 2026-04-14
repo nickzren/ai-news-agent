@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, TypedDict
 from urllib.error import URLError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +46,14 @@ _VALID_FEED_MODES = frozenset({"core", "discovery_only"})
 
 # Location of feeds configuration file (project root)
 _FEEDS_FILE = Path(__file__).resolve().parent.parent / "feeds.json"
+
+
+class CollectionStats(TypedDict):
+    feeds_total: int
+    feeds_succeeded: int
+    feeds_failed: int
+    items_collected: int
+    feed_errors: list[dict[str, str]]
 
 
 def _normalize_source_role(value: Any) -> SourceRole:
@@ -211,7 +219,7 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
 def _fetch_feed_entries(
     url: str,
     meta: dict[str, str],
-) -> tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]]]:
+) -> tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]], bool, str]:
     category = meta.get("category", "All")
     src = meta.get("source", urlparse(url).netloc or "Unknown Source")
     source_type = meta.get("type", "news")
@@ -222,7 +230,7 @@ def _fetch_feed_entries(
         parsed = _fetch_with_retry(url)
     except Exception as exc:
         logger.error("Feed error for %s: %s", url, exc)
-        return src, category, source_type, source_role, feed_mode, []
+        return src, category, source_type, source_role, feed_mode, [], False, str(exc)
 
     if parsed.bozo:
         logger.warning(
@@ -232,17 +240,27 @@ def _fetch_feed_entries(
         )
 
     entries = list(parsed.entries) if hasattr(parsed, "entries") else []
+    has_usable_entries = any(
+        _parse_date(entry) and _clean_title(entry.get("title", "")) and str(entry.get("link", "")).strip()
+        for entry in entries
+    )
+    ok = not parsed.bozo or has_usable_entries
+    if not ok:
+        logger.error("Feed parse failed for %s: malformed feed with no usable entries", src)
+    error_message = "" if ok else "malformed feed with no usable entries"
     logger.debug("Found %d entries from %s", len(entries), src)
-    return src, category, source_type, source_role, feed_mode, entries
+    return src, category, source_type, source_role, feed_mode, entries, ok, error_message
 
 
-def collect_items() -> list[CollectedItem]:
-    """Return list[dict] fresh within 24 h."""
+def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
+    """Return collected items plus feed health stats for the current run."""
     cutoff = _now() - _DAY
     logger.info("Collecting items newer than %s", cutoff)
     items: list[CollectedItem] = []
     feeds = _load_feeds()
-    feed_results: list[tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]]]] = []
+    feed_results: list[
+        tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]], bool, str]
+    ] = []
 
     max_workers = max(1, min(RSS_MAX_WORKERS, len(feeds)))
     if max_workers == 1:
@@ -257,7 +275,21 @@ def collect_items() -> list[CollectedItem]:
             for future in as_completed(futures):
                 feed_results.append(future.result())
 
-    for src, category, source_type, source_role, feed_mode, entries in feed_results:
+    feeds_succeeded = 0
+    feeds_failed = 0
+    feed_errors: list[dict[str, str]] = []
+
+    for src, category, source_type, source_role, feed_mode, entries, ok, error_message in feed_results:
+        if ok:
+            feeds_succeeded += 1
+        else:
+            feeds_failed += 1
+            feed_errors.append(
+                {
+                    "source": src,
+                    "error": error_message,
+                }
+            )
         for e in entries:
             ts = _parse_date(e)
             if not ts:
@@ -292,4 +324,16 @@ def collect_items() -> list[CollectedItem]:
             )
 
     logger.info("Collected %d total items from all feeds", len(items))
+    return items, {
+        "feeds_total": len(feeds),
+        "feeds_succeeded": feeds_succeeded,
+        "feeds_failed": feeds_failed,
+        "items_collected": len(items),
+        "feed_errors": feed_errors,
+    }
+
+
+def collect_items() -> list[CollectedItem]:
+    """Return list[dict] fresh within 24 h."""
+    items, _stats = collect_items_with_stats()
     return items
