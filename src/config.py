@@ -39,6 +39,8 @@ DIGEST_STATUS_FILE: str = _get_env_str("DIGEST_STATUS_FILE", "digest-run-status.
 DIGEST_ISSUE_REPO: str = _get_env_str("DIGEST_ISSUE_REPO", "nickzren/ai-news-agent")
 DIGEST_ISSUE_LABEL: str = _get_env_str("DIGEST_ISSUE_LABEL", "ai-digest")
 DIGEST_ISSUE_TITLE_PREFIX: str = _get_env_str("DIGEST_ISSUE_TITLE_PREFIX", "AI Headlines")
+DIGEST_PUBLISH_WORKFLOW: str = _get_env_str("DIGEST_PUBLISH_WORKFLOW", "publish-digest.yml")
+DIGEST_ACTIONS_REF: str = _get_env_str("DIGEST_ACTIONS_REF", "main")
 
 # ── Feed Limits ─────────────────────────────────────────────────
 PAPER_LIMIT: int = _get_env_int("PAPER_LIMIT", 7)

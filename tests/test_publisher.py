@@ -1,5 +1,7 @@
 """Tests for GitHub issue publishing."""
 
+import base64
+import gzip
 import subprocess
 from pathlib import Path
 
@@ -251,3 +253,48 @@ def test_check_issue_status_falls_back_to_gh_when_token_auth_fails(monkeypatch):
         "issue_number": 12,
         "title": "AI Headlines – 2026-04-13",
     }
+
+
+def test_encode_dispatch_body_round_trips():
+    body = "Hello\n\nWorld"
+
+    encoded = publisher._encode_dispatch_body(body)
+
+    assert gzip.decompress(base64.b64decode(encoded)).decode("utf-8") == body
+
+
+def test_dispatch_publish_workflow_posts_dispatch_payload(tmp_path, monkeypatch):
+    news_file = tmp_path / "news.md"
+    news_file.write_text("hello world", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
+    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+
+    calls: list[tuple[str, str, object | None]] = []
+
+    def fake_request(method: str, path: str, payload=None):
+        calls.append((method, path, payload))
+        return None
+
+    monkeypatch.setattr(publisher, "_github_api_request", fake_request)
+
+    result = publisher.dispatch_publish_workflow(news_file)
+
+    assert result == {
+        "workflow": "publish-digest.yml",
+        "ref": "main",
+        "title": "AI Headlines – 2026-04-13",
+    }
+    assert calls == [
+        (
+            "POST",
+            "/repos/nickzren/ai-news-agent/actions/workflows/publish-digest.yml/dispatches",
+            {
+                "ref": "main",
+                "inputs": {
+                    "issue_title": "AI Headlines – 2026-04-13",
+                    "issue_body_gz_b64": publisher._encode_dispatch_body("hello world"),
+                },
+            },
+        )
+    ]
