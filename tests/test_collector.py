@@ -1,6 +1,7 @@
 """Tests for collector module - URL normalization."""
 from datetime import datetime, timezone
 from urllib.error import URLError
+from urllib.parse import parse_qs, urlparse
 
 import collector
 from collector import normalize_url
@@ -34,7 +35,9 @@ def test_normalize_url_lowercases_host():
     """Test that hostname is lowercased."""
     url = "https://EXAMPLE.COM/Article"
     result = normalize_url(url)
-    assert "example.com" in result
+    parsed = urlparse(result)
+    assert parsed.hostname == "example.com"
+    assert parsed.path == "/Article"
 
 
 def test_normalize_url_removes_utm_params():
@@ -53,15 +56,14 @@ def test_normalize_url_preserves_meaningful_params():
     """Test that non-tracking query parameters are preserved."""
     url = "https://example.com/search?q=test&page=2"
     result = normalize_url(url)
-    assert "q=" in result or "page=" in result
+    assert parse_qs(urlparse(result).query) == {"q": ["test"], "page": ["2"]}
 
 
 def test_normalize_url_mixed_params():
     """Test URL with both tracking and meaningful params."""
     url = "https://example.com/article?id=123&utm_source=twitter"
     result = normalize_url(url)
-    assert "id=" in result
-    assert "utm_source" not in result
+    assert parse_qs(urlparse(result).query) == {"id": ["123"]}
 
 
 def test_normalize_url_different_schemes():
@@ -74,10 +76,11 @@ def test_normalize_url_complex():
     """Test complex URL normalization."""
     url = "HTTPS://WWW.Example.COM/Path/To/Article/?utm_source=test&id=123&utm_medium=email"
     result = normalize_url(url)
-    assert "https://example.com/Path/To/Article" in result
-    assert "id=123" in result
-    assert "utm_source" not in result
-    assert "utm_medium" not in result
+    parsed = urlparse(result)
+    assert parsed.scheme == "https"
+    assert parsed.hostname == "example.com"
+    assert parsed.path == "/Path/To/Article"
+    assert parse_qs(parsed.query) == {"id": ["123"]}
 
 
 def test_parse_date_uses_utc_tuple():
@@ -278,7 +281,7 @@ def test_collect_items_skips_failed_feeds(monkeypatch):
     )
 
     def fake_fetch(url: str):
-        if "bad.example.com" in url:
+        if urlparse(url).hostname == "bad.example.com":
             raise URLError("feed down")
         return Parsed()
 
@@ -326,7 +329,7 @@ def test_collect_items_with_stats_tracks_feed_health(monkeypatch):
     )
 
     def fake_fetch(url: str):
-        if "bad.example.com" in url:
+        if urlparse(url).hostname == "bad.example.com":
             raise URLError("feed down")
         return Parsed()
 
