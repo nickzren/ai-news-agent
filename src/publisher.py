@@ -182,7 +182,7 @@ def _github_api_request_via_gh(
     *,
     payload: dict[str, Any] | None = None,
 ) -> Any:
-    command = [
+    command = _gh_issue_list_command(method, path, payload) or [
         "gh",
         "api",
         path,
@@ -228,10 +228,38 @@ def _github_api_request_via_gh(
         raise RuntimeError(f"GitHub gh api {method} {path} returned invalid JSON") from exc
 
 
+def _gh_issue_list_command(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None,
+) -> list[str] | None:
+    if method != "GET" or payload is not None:
+        return None
+    if not path.startswith("/repos/") or "/issues?" not in path:
+        return None
+    repo_full_name = path.removeprefix("/repos/").split("/issues?", 1)[0]
+    if not repo_full_name:
+        return None
+    return [
+        "gh",
+        "issue",
+        "list",
+        "--repo",
+        repo_full_name,
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,labels",
+    ]
+
+
 def check_issue_status() -> IssueStatusResult:
     owner, repo = _get_repo_owner_name()
     issue_title = _today_issue_title()
-    query = urlencode({"state": "open", "labels": DIGEST_ISSUE_LABEL, "per_page": 100})
+    # Repo issue listing defaults to assigned issues; digest issues are unassigned.
+    query = urlencode({"filter": "all", "state": "open", "per_page": 100})
     issues = _github_api_request(
         "GET",
         f"/repos/{owner}/{repo}/issues?{query}",
@@ -239,17 +267,34 @@ def check_issue_status() -> IssueStatusResult:
     if not isinstance(issues, list):
         raise RuntimeError("Unexpected GitHub issues response")
 
-    existing_issue = next(
-        (issue for issue in issues if isinstance(issue, dict) and issue.get("title") == issue_title),
-        None,
-    )
-    if existing_issue is None:
+    matching_issues = [
+        issue
+        for issue in issues
+        if isinstance(issue, dict)
+        and issue.get("title") == issue_title
+        and _issue_has_label(issue, DIGEST_ISSUE_LABEL)
+    ]
+    if not matching_issues:
         return {"exists": False, "issue_number": None, "title": issue_title}
+
+    existing_issue = min(matching_issues, key=lambda issue: int(issue["number"]))
     return {
         "exists": True,
         "issue_number": int(existing_issue["number"]),
         "title": issue_title,
     }
+
+
+def _issue_has_label(issue: dict[str, Any], label_name: str) -> bool:
+    labels = issue.get("labels", [])
+    if not isinstance(labels, list):
+        return False
+    for label in labels:
+        if isinstance(label, dict) and label.get("name") == label_name:
+            return True
+        if isinstance(label, str) and label == label_name:
+            return True
+    return False
 
 
 def publish_issue(news_file: Path | None = None) -> PublishResult:

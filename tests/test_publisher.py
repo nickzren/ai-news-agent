@@ -20,7 +20,13 @@ def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
     def fake_request(method: str, path: str, payload=None):
         calls.append((method, path, payload))
         if method == "GET":
-            return [{"number": 12, "title": "AI Headlines – 2026-04-13"}]
+            return [
+                {
+                    "number": 12,
+                    "title": "AI Headlines – 2026-04-13",
+                    "labels": [{"name": "ai-digest"}],
+                }
+            ]
         if method == "PATCH":
             return {"number": 12}
         raise AssertionError(f"unexpected call: {method} {path}")
@@ -44,7 +50,65 @@ def test_check_issue_status_finds_existing_issue(monkeypatch):
 
     def fake_request(method: str, path: str, payload=None):
         assert method == "GET"
-        return [{"number": 12, "title": "AI Headlines – 2026-04-13"}]
+        assert path == "/repos/nickzren/ai-news-agent/issues?filter=all&state=open&per_page=100"
+        return [
+            {
+                "number": 12,
+                "title": "AI Headlines – 2026-04-13",
+                "labels": [{"name": "ai-digest"}],
+            }
+        ]
+
+    monkeypatch.setattr(publisher, "_github_api_request", fake_request)
+
+    result = publisher.check_issue_status()
+
+    assert result == {
+        "exists": True,
+        "issue_number": 12,
+        "title": "AI Headlines – 2026-04-13",
+    }
+
+
+def test_check_issue_status_ignores_unlabeled_matching_title(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
+    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+
+    def fake_request(method: str, path: str, payload=None):
+        assert method == "GET"
+        return [{"number": 12, "title": "AI Headlines – 2026-04-13", "labels": []}]
+
+    monkeypatch.setattr(publisher, "_github_api_request", fake_request)
+
+    result = publisher.check_issue_status()
+
+    assert result == {
+        "exists": False,
+        "issue_number": None,
+        "title": "AI Headlines – 2026-04-13",
+    }
+
+
+def test_check_issue_status_uses_lowest_issue_number_for_duplicates(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
+    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+
+    def fake_request(method: str, path: str, payload=None):
+        assert method == "GET"
+        return [
+            {
+                "number": 13,
+                "title": "AI Headlines – 2026-04-13",
+                "labels": [{"name": "ai-digest"}],
+            },
+            {
+                "number": 12,
+                "title": "AI Headlines – 2026-04-13",
+                "labels": [{"name": "ai-digest"}],
+            },
+        ]
 
     monkeypatch.setattr(publisher, "_github_api_request", fake_request)
 
@@ -138,16 +202,23 @@ def test_check_issue_status_falls_back_to_gh_cli(monkeypatch):
     monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
 
     def fake_run(command, input=None, text=None, capture_output=None, check=None, env=None):
-        assert command[:4] == [
+        assert command == [
             "gh",
-            "api",
-            "/repos/nickzren/ai-news-agent/issues?state=open&labels=ai-digest&per_page=100",
-            "--method",
+            "issue",
+            "list",
+            "--repo",
+            "nickzren/ai-news-agent",
+            "--state",
+            "open",
+            "--limit",
+            "100",
+            "--json",
+            "number,title,labels",
         ]
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout='[{"number": 12, "title": "AI Headlines – 2026-04-13"}]',
+            stdout='[{"number": 12, "title": "AI Headlines – 2026-04-13", "labels": [{"name": "ai-digest"}]}]',
             stderr="",
         )
 
@@ -174,7 +245,7 @@ def test_publish_issue_uses_gh_cli_when_no_token(tmp_path, monkeypatch):
 
     def fake_run(command, input=None, text=None, capture_output=None, check=None, env=None):
         calls.append((command, input))
-        if command[2] == "/repos/nickzren/ai-news-agent/issues?state=open&labels=ai-digest&per_page=100":
+        if command[:3] == ["gh", "issue", "list"]:
             return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
         if command[2] == "/repos/nickzren/ai-news-agent/issues":
             assert input == '{"title": "AI Headlines \\u2013 2026-04-13", "body": "hello world", "labels": ["ai-digest"]}'
@@ -242,7 +313,7 @@ def test_check_issue_status_falls_back_to_gh_when_token_auth_fails(monkeypatch):
         publisher,
         "_github_api_request_via_gh",
         lambda method, path, *, payload=None: [
-            {"number": 12, "title": "AI Headlines – 2026-04-13"}
+            {"number": 12, "title": "AI Headlines – 2026-04-13", "labels": ["ai-digest"]}
         ],
     )
 
