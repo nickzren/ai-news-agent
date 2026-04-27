@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 try:
@@ -35,6 +34,27 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
 
 _GITHUB_API_BASE = "https://api.github.com"
 _MAX_ISSUE_BODY_CHARS = 65_000
+_OPEN_ISSUES_QUERY = """
+query($owner: String!, $repo: String!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    issues(first: 100, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        labels(first: 20) {
+          nodes {
+            name
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+"""
 _PLACEHOLDER_GITHUB_TOKENS = frozenset(
     {
         "ghp-your-token-here",
@@ -182,7 +202,7 @@ def _github_api_request_via_gh(
     *,
     payload: dict[str, Any] | None = None,
 ) -> Any:
-    command = _gh_issue_list_command(method, path, payload) or [
+    command = [
         "gh",
         "api",
         path,
@@ -228,44 +248,132 @@ def _github_api_request_via_gh(
         raise RuntimeError(f"GitHub gh api {method} {path} returned invalid JSON") from exc
 
 
-def _gh_issue_list_command(
-    method: str,
-    path: str,
-    payload: dict[str, Any] | None,
-) -> list[str] | None:
-    if method != "GET" or payload is not None:
-        return None
-    if not path.startswith("/repos/") or "/issues?" not in path:
-        return None
-    repo_full_name = path.removeprefix("/repos/").split("/issues?", 1)[0]
-    if not repo_full_name:
-        return None
-    return [
+def _github_graphql_request_via_token(
+    query: str,
+    variables: dict[str, Any],
+    *,
+    token: str,
+) -> dict[str, Any]:
+    request = Request(
+        f"{_GITHUB_API_BASE}/graphql",
+        data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "ai-news-agent/1.0",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:  # pragma: no cover - exercised via behavior, not exact body
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub GraphQL failed: {exc.code} {detail}") from exc
+    except URLError as exc:  # pragma: no cover - network dependent
+        raise RuntimeError(f"GitHub GraphQL failed: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("Unexpected GitHub GraphQL response")
+    if payload.get("errors"):
+        raise RuntimeError(f"GitHub GraphQL failed: {payload['errors']}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("Unexpected GitHub GraphQL response")
+    return data
+
+
+def _list_open_issues(owner: str, repo: str) -> list[dict[str, Any]]:
+    token = _get_github_token()
+    if token:
+        try:
+            return _list_open_issues_via_graphql_token(owner, repo, token=token)
+        except RuntimeError as exc:
+            if not _is_github_auth_failure(str(exc)):
+                raise
+    return _list_open_issues_via_gh(owner, repo)
+
+
+def _list_open_issues_via_graphql_token(
+    owner: str,
+    repo: str,
+    *,
+    token: str,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    cursor: str | None = None
+
+    while True:
+        data = _github_graphql_request_via_token(
+            _OPEN_ISSUES_QUERY,
+            {"owner": owner, "repo": repo, "cursor": cursor},
+            token=token,
+        )
+        issue_page = data["repository"]["issues"]
+        for issue in issue_page["nodes"]:
+            labels = issue.get("labels", {}).get("nodes", [])
+            issues.append(
+                {
+                    "number": issue["number"],
+                    "title": issue["title"],
+                    "labels": labels,
+                }
+            )
+
+        page_info = issue_page["pageInfo"]
+        if not page_info["hasNextPage"]:
+            return issues
+        cursor = page_info["endCursor"]
+
+
+def _list_open_issues_via_gh(owner: str, repo: str) -> list[dict[str, Any]]:
+    command = [
         "gh",
         "issue",
         "list",
         "--repo",
-        repo_full_name,
+        f"{owner}/{repo}",
         "--state",
         "open",
         "--limit",
-        "100",
+        "1000",
         "--json",
         "number,title,labels",
     ]
+    try:
+        env = os.environ.copy()
+        env.pop("GITHUB_TOKEN", None)
+        env.pop("GH_TOKEN", None)
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Missing GITHUB_TOKEN or GH_TOKEN for issue publishing, and gh CLI is unavailable"
+        ) from exc
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
+        raise RuntimeError(f"GitHub issue list failed: {detail}")
+
+    try:
+        payload = json.loads(result.stdout.strip() or "[]")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GitHub issue list returned invalid JSON") from exc
+    if not isinstance(payload, list):
+        raise RuntimeError("Unexpected GitHub issue list response")
+    return [issue for issue in payload if isinstance(issue, dict)]
 
 
 def check_issue_status() -> IssueStatusResult:
     owner, repo = _get_repo_owner_name()
     issue_title = _today_issue_title()
-    # Repo issue listing defaults to assigned issues; digest issues are unassigned.
-    query = urlencode({"filter": "all", "state": "open", "per_page": 100})
-    issues = _github_api_request(
-        "GET",
-        f"/repos/{owner}/{repo}/issues?{query}",
-    )
-    if not isinstance(issues, list):
-        raise RuntimeError("Unexpected GitHub issues response")
+    issues = _list_open_issues(owner, repo)
 
     matching_issues = [
         issue
