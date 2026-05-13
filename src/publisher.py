@@ -189,6 +189,41 @@ def _is_github_auth_failure(message: str) -> bool:
     )
 
 
+def _run_gh_json(
+    command: list[str],
+    *,
+    stdin: str | None = None,
+    error_prefix: str,
+    empty_stdout: Any = None,
+) -> Any:
+    try:
+        env = os.environ.copy()
+        for env_name in _GITHUB_TOKEN_ENV_NAMES:
+            env.pop(env_name, None)
+        result = subprocess.run(
+            command,
+            input=stdin,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(_MISSING_GITHUB_AUTH_MESSAGE) from exc
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
+        raise RuntimeError(f"{error_prefix} failed: {detail}")
+
+    stdout = result.stdout.strip()
+    if not stdout:
+        return empty_stdout
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{error_prefix} returned invalid JSON") from exc
+
+
 def _github_api_request_via_token(
     method: str,
     path: str,
@@ -243,32 +278,11 @@ def _github_api_request_via_gh(
         command.extend(["--input", "-"])
         stdin = json.dumps(payload)
 
-    try:
-        env = os.environ.copy()
-        for env_name in _GITHUB_TOKEN_ENV_NAMES:
-            env.pop(env_name, None)
-        result = subprocess.run(
-            command,
-            input=stdin,
-            text=True,
-            capture_output=True,
-            check=False,
-            env=env,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError(_MISSING_GITHUB_AUTH_MESSAGE) from exc
-
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        raise RuntimeError(f"GitHub gh api {method} {path} failed: {detail}")
-
-    stdout = result.stdout.strip()
-    if not stdout:
-        return None
-    try:
-        return json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"GitHub gh api {method} {path} returned invalid JSON") from exc
+    return _run_gh_json(
+        command,
+        stdin=stdin,
+        error_prefix=f"GitHub gh api {method} {path}",
+    )
 
 
 def _github_graphql_request_via_token(
@@ -372,28 +386,11 @@ def _list_open_issues_via_gh(owner: str, repo: str) -> list[dict[str, Any]]:
         "--json",
         "number,title,labels",
     ]
-    try:
-        env = os.environ.copy()
-        for env_name in _GITHUB_TOKEN_ENV_NAMES:
-            env.pop(env_name, None)
-        result = subprocess.run(
-            command,
-            text=True,
-            capture_output=True,
-            check=False,
-            env=env,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError(_MISSING_GITHUB_AUTH_MESSAGE) from exc
-
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        raise RuntimeError(f"GitHub issue list failed: {detail}")
-
-    try:
-        payload = json.loads(result.stdout.strip() or "[]")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("GitHub issue list returned invalid JSON") from exc
+    payload = _run_gh_json(
+        command,
+        error_prefix="GitHub issue list",
+        empty_stdout=[],
+    )
     if not isinstance(payload, list):
         raise RuntimeError("Unexpected GitHub issue list response")
     return [issue for issue in payload if isinstance(issue, dict)]
