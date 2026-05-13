@@ -1130,37 +1130,41 @@ def node_filter(state: DigestState) -> DigestState:
     return state
 
 
-def node_categorize(state: DigestState) -> DigestState:
-    items = cast(list[CollectedItem], state.get("items", []))
-    if not items:
-        collector_stats = cast(
-            CollectionStats,
-            state.get(
-                "collection_stats",
-                {
-                    "feeds_total": 0,
-                    "feeds_succeeded": 0,
-                    "feeds_failed": 0,
-                    "items_collected": 0,
-                },
-            ),
+def _categorize_empty_state(state: DigestState) -> DigestState:
+    collector_stats = cast(
+        CollectionStats,
+        state.get(
+            "collection_stats",
+            {
+                "feeds_total": 0,
+                "feeds_succeeded": 0,
+                "feeds_failed": 0,
+                "items_collected": 0,
+            },
+        ),
+    )
+    export_status = _build_candidate_export_status(
+        collector_stats,
+        items_filtered=0,
+        groups=0,
+    )
+    if not export_status["ok"]:
+        raise RuntimeError(
+            "Candidate export failed health checks: "
+            f"{export_status['reason']} "
+            f"(feeds_total={export_status['feeds_total']}, "
+            f"feeds_failed={export_status['feeds_failed']})"
         )
-        export_status = _build_candidate_export_status(
-            collector_stats,
-            items_filtered=0,
-            groups=0,
-        )
-        if not export_status["ok"]:
-            raise RuntimeError(
-                "Candidate export failed health checks: "
-                f"{export_status['reason']} "
-                f"(feeds_total={export_status['feeds_total']}, "
-                f"feeds_failed={export_status['feeds_failed']})"
-            )
-        logger.warning("No items to categorize")
-        return state
+    logger.warning("No items to categorize")
+    return state
 
-    groups = _build_candidate_groups(items)
+
+def _index_candidate_groups(
+    groups: list[list[CollectedItem]],
+) -> tuple[
+    list[tuple[int, list[CollectedItem]]],
+    list[tuple[int, list[CollectedItem]]],
+]:
     indexed_groups = list(enumerate(groups, start=1))
     ambiguous_indexed_groups = [
         (group_index, group)
@@ -1172,38 +1176,37 @@ def node_categorize(state: DigestState) -> DigestState:
         for group_index, group in indexed_groups
         if len(group) == 1
     ]
-    logger.info(
-        "Built %d candidate groups (%d ambiguous)",
-        len(groups),
-        len(ambiguous_indexed_groups),
+    return ambiguous_indexed_groups, distinct_indexed_groups
+
+
+def _finalize_local_categorization(
+    state: DigestState,
+    groups: list[list[CollectedItem]],
+    *,
+    log_label: str,
+) -> DigestState:
+    resolved_items, skipped_duplicates = _fallback_resolve_groups(groups)
+    state["executive_summary"] = ""
+    state["top_stories"] = []
+    return cast(DigestState, _finalize_items(
+        state,
+        resolved_items,
+        skipped_duplicates,
+        log_label=log_label,
+        logger=logger,
+        paper_limit=PAPER_LIMIT,
+    ))
+
+
+def _dedupe_ambiguous_groups(
+    client: OpenAI,
+    ambiguous_indexed_groups: list[tuple[int, list[CollectedItem]]],
+) -> tuple[list[ResolvedItem], int]:
+    dedupe_payload = json.dumps(
+        {"groups": _build_dedupe_prompt_groups(ambiguous_indexed_groups)},
+        ensure_ascii=True,
     )
-
-    api_key = _get_openai_api_key()
-    if not api_key:
-        logger.warning("No valid OPENAI_API_KEY found, using local duplicate resolution")
-        resolved_items, skipped_duplicates = _fallback_resolve_groups(groups)
-        state["executive_summary"] = ""
-        state["top_stories"] = []
-        return cast(DigestState, _finalize_items(
-            state,
-            resolved_items,
-            skipped_duplicates,
-            log_label="After categorization",
-            logger=logger,
-            paper_limit=PAPER_LIMIT,
-        ))
-
-    try:
-        client = _get_openai_client(api_key)
-        skipped_items = 0
-        resolved_items = _prepare_distinct_items(distinct_indexed_groups)
-
-        if ambiguous_indexed_groups:
-            dedupe_payload = json.dumps(
-                {"groups": _build_dedupe_prompt_groups(ambiguous_indexed_groups)},
-                ensure_ascii=True,
-            )
-            dedupe_prompt = f"""Deduplicate these AI news groups.
+    dedupe_prompt = f"""Deduplicate these AI news groups.
 
 Each group contains possible near-duplicates. Only compare items within the same group.
 
@@ -1233,19 +1236,26 @@ Input JSON:
 {dedupe_payload}
 """
 
-            dedupe_response = _extract_json_object(_chat_completion_text(client, dedupe_prompt))
-            deduped_items, skipped_items = _apply_dedupe_response(
-                ambiguous_indexed_groups,
-                dedupe_response,
-            )
-            resolved_items.extend(deduped_items)
+    dedupe_response = _extract_json_object(_chat_completion_text(client, dedupe_prompt))
+    return _apply_dedupe_response(
+        ambiguous_indexed_groups,
+        dedupe_response,
+    )
 
-        categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
-        enrichment_payload = json.dumps(
-            {"items": [_serialize_enrichment_item(item) for item in resolved_items]},
-            ensure_ascii=True,
-        )
-        enrichment_prompt = f"""Enrich these deduplicated AI news items for the daily digest.
+
+def _enrich_resolved_items(
+    state: DigestState,
+    client: OpenAI,
+    resolved_items: list[ResolvedItem],
+    *,
+    skipped_items: int,
+) -> DigestState:
+    categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
+    enrichment_payload = json.dumps(
+        {"items": [_serialize_enrichment_item(item) for item in resolved_items]},
+        ensure_ascii=True,
+    )
+    enrichment_prompt = f"""Enrich these deduplicated AI news items for the daily digest.
 
 Each item is already deduplicated.
 
@@ -1282,32 +1292,82 @@ Input JSON:
 {enrichment_payload}
 """
 
-        enrichment_response = _extract_json_object(
-            _chat_completion_text(client, enrichment_prompt)
+    enrichment_response = _extract_json_object(
+        _chat_completion_text(client, enrichment_prompt)
+    )
+    return _apply_enrichment_response(
+        state,
+        resolved_items,
+        enrichment_response,
+        skipped_items=skipped_items,
+        log_label="After categorization",
+    )
+
+
+def _categorize_with_openai(
+    state: DigestState,
+    api_key: str,
+    ambiguous_indexed_groups: list[tuple[int, list[CollectedItem]]],
+    distinct_indexed_groups: list[tuple[int, list[CollectedItem]]],
+) -> DigestState:
+    client = _get_openai_client(api_key)
+    skipped_items = 0
+    resolved_items = _prepare_distinct_items(distinct_indexed_groups)
+
+    if ambiguous_indexed_groups:
+        deduped_items, skipped_items = _dedupe_ambiguous_groups(
+            client,
+            ambiguous_indexed_groups,
         )
-        return _apply_enrichment_response(
+        resolved_items.extend(deduped_items)
+
+    return _enrich_resolved_items(
+        state,
+        client,
+        resolved_items,
+        skipped_items=skipped_items,
+    )
+
+
+def node_categorize(state: DigestState) -> DigestState:
+    items = cast(list[CollectedItem], state.get("items", []))
+    if not items:
+        return _categorize_empty_state(state)
+
+    groups = _build_candidate_groups(items)
+    ambiguous_indexed_groups, distinct_indexed_groups = _index_candidate_groups(groups)
+    logger.info(
+        "Built %d candidate groups (%d ambiguous)",
+        len(groups),
+        len(ambiguous_indexed_groups),
+    )
+
+    api_key = _get_openai_api_key()
+    if not api_key:
+        logger.warning("No valid OPENAI_API_KEY found, using local duplicate resolution")
+        return _finalize_local_categorization(
             state,
-            resolved_items,
-            enrichment_response,
-            skipped_items=skipped_items,
+            groups,
             log_label="After categorization",
+        )
+
+    try:
+        return _categorize_with_openai(
+            state,
+            api_key,
+            ambiguous_indexed_groups,
+            distinct_indexed_groups,
         )
     except Exception as exc:
         logger.error(
             "Categorization error: %s. Falling back to local duplicate resolution.",
             exc,
         )
-        resolved_items, skipped_items = _fallback_resolve_groups(groups)
-        state["executive_summary"] = ""
-        state["top_stories"] = []
-        return cast(DigestState, _finalize_items(
+        return _finalize_local_categorization(
             state,
-            resolved_items,
-            skipped_items,
+            groups,
             log_label="After local categorization",
-            logger=logger,
-            paper_limit=PAPER_LIMIT,
-        ))
+        )
 
 
 def node_render(state: DigestState) -> DigestState:
