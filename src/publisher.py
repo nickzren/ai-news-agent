@@ -9,7 +9,7 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Callable, Literal, TypeVar, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -74,6 +74,7 @@ _MISSING_GITHUB_AUTH_MESSAGE = (
     "Missing DIGEST_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN for issue publishing, "
     "and gh CLI is unavailable"
 )
+_GitHubResult = TypeVar("_GitHubResult")
 
 
 class PublishResult(TypedDict):
@@ -160,22 +161,15 @@ def _github_api_request(
     path: str,
     payload: dict[str, Any] | None = None,
 ) -> Any:
-    token = _get_github_token()
-    if _prefer_gh_cli():
-        try:
-            return _github_api_request_via_gh(method, path, payload=payload)
-        except RuntimeError as exc:
-            if not token or not _is_gh_cli_unavailable(str(exc)):
-                raise
-            return _github_api_request_via_token(method, path, token=token, payload=payload)
-
-    if token:
-        try:
-            return _github_api_request_via_token(method, path, token=token, payload=payload)
-        except RuntimeError as exc:
-            if not _is_github_auth_failure(str(exc)):
-                raise
-    return _github_api_request_via_gh(method, path, payload=payload)
+    return _request_with_github_auth(
+        via_token=lambda token: _github_api_request_via_token(
+            method,
+            path,
+            token=token,
+            payload=payload,
+        ),
+        via_gh=lambda: _github_api_request_via_gh(method, path, payload=payload),
+    )
 
 
 def _is_github_auth_failure(message: str) -> bool:
@@ -187,6 +181,29 @@ def _is_github_auth_failure(message: str) -> bool:
         or "requires authentication" in lowered
         or "resource not accessible by integration" in lowered
     )
+
+
+def _request_with_github_auth(
+    *,
+    via_token: Callable[[str], _GitHubResult],
+    via_gh: Callable[[], _GitHubResult],
+) -> _GitHubResult:
+    token = _get_github_token()
+    if _prefer_gh_cli():
+        try:
+            return via_gh()
+        except RuntimeError as exc:
+            if not token or not _is_gh_cli_unavailable(str(exc)):
+                raise
+            return via_token(token)
+
+    if token:
+        try:
+            return via_token(token)
+        except RuntimeError as exc:
+            if not _is_github_auth_failure(str(exc)):
+                raise
+    return via_gh()
 
 
 def _run_gh_json(
@@ -322,22 +339,14 @@ def _github_graphql_request_via_token(
 
 
 def _list_open_issues(owner: str, repo: str) -> list[dict[str, Any]]:
-    token = _get_github_token()
-    if _prefer_gh_cli():
-        try:
-            return _list_open_issues_via_gh(owner, repo)
-        except RuntimeError as exc:
-            if not token or not _is_gh_cli_unavailable(str(exc)):
-                raise
-            return _list_open_issues_via_graphql_token(owner, repo, token=token)
-
-    if token:
-        try:
-            return _list_open_issues_via_graphql_token(owner, repo, token=token)
-        except RuntimeError as exc:
-            if not _is_github_auth_failure(str(exc)):
-                raise
-    return _list_open_issues_via_gh(owner, repo)
+    return _request_with_github_auth(
+        via_token=lambda token: _list_open_issues_via_graphql_token(
+            owner,
+            repo,
+            token=token,
+        ),
+        via_gh=lambda: _list_open_issues_via_gh(owner, repo),
+    )
 
 
 def _list_open_issues_via_graphql_token(
