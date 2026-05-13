@@ -43,7 +43,7 @@ try:
         PAPER_LIMIT,
         resolve_repo_output_file,
     )
-    from finalize import finalize_items as _finalize_items
+    from finalize import finalize_items as _finalize_items, is_paper_item
     from filterer import deduplicate, exclude_noise
     from item_types import CandidateItem, CollectedItem, EnrichmentItem, ResolvedItem
     from ranking import (
@@ -70,7 +70,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         PAPER_LIMIT,
         resolve_repo_output_file,
     )
-    from .finalize import finalize_items as _finalize_items
+    from .finalize import finalize_items as _finalize_items, is_paper_item
     from .filterer import deduplicate, exclude_noise
     from .item_types import CandidateItem, CollectedItem, EnrichmentItem, ResolvedItem
     from .ranking import (
@@ -631,10 +631,8 @@ def _fallback_categorize(item: CollectedItem) -> str:
         return category_hint
 
     title = _title_for_matching(item).lower()
-    source = str(item.get("source", "")).lower()
-    source_type = str(item.get("source_type", "")).lower()
 
-    if source_type == "paper" or "papers" in source:
+    if is_paper_item(item):
         return "Research & Models"
 
     if any(word in title for word in ["lawsuit", "court", "legal", "copyright", "safety", "regulation", "ban"]):

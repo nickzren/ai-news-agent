@@ -1,5 +1,6 @@
 """Finalization helpers for ai-news-agent."""
 
+from collections.abc import Mapping
 from collections import defaultdict
 from logging import Logger
 from typing import Any
@@ -18,15 +19,18 @@ def _sort_items_by_recency(items: list[ResolvedItem]) -> list[ResolvedItem]:
     return sorted(items, key=lambda item: item["published"], reverse=True)
 
 
+def is_paper_item(item: Mapping[str, Any]) -> bool:
+    source_type = str(item.get("source_type", "")).lower()
+    return source_type == "paper" or "papers" in str(item.get("source", "")).lower()
+
+
 def _limit_papers(items: list[ResolvedItem], *, limit: int) -> tuple[list[ResolvedItem], int]:
     paper_count = 0
     filtered_items: list[ResolvedItem] = []
     skipped_papers = 0
 
     for item in items:
-        source_type = str(item.get("source_type", "")).lower()
-        is_paper = source_type == "paper" or "papers" in str(item.get("source", "")).lower()
-        if is_paper:
+        if is_paper_item(item):
             if paper_count >= limit:
                 skipped_papers += 1
                 continue
