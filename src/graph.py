@@ -149,6 +149,13 @@ class ItemMatchData(TypedDict):
     title_tokens: set[str]
 
 
+class ResolvedResponseCluster(TypedDict):
+    requested_keep_id: str
+    keep_id: str
+    cluster_member_ids: list[str]
+    duplicate_items: list[CollectedItem]
+
+
 def _promote_renderable_keep_id(
     group_prompt_ids: dict[str, CollectedItem],
     keep_id: str,
@@ -797,6 +804,57 @@ def _prepare_distinct_items(
     return prepared_items
 
 
+def _build_group_prompt_ids(
+    group_id: str,
+    group: list[CollectedItem],
+) -> dict[str, CollectedItem]:
+    return {
+        f"{group_id}i{item_index}": item
+        for item_index, item in enumerate(group, start=1)
+    }
+
+
+def _resolve_response_cluster(
+    cluster: dict[str, Any],
+    group_prompt_ids: dict[str, CollectedItem],
+    used_ids: set[str],
+) -> ResolvedResponseCluster | None:
+    requested_keep_id = str(cluster.get("keep_id", "")).strip()
+    if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
+        return None
+
+    duplicate_ids: list[str] = []
+    for raw_duplicate_id in cluster.get("duplicate_ids", []):
+        duplicate_id = str(raw_duplicate_id).strip()
+        if (
+            duplicate_id
+            and duplicate_id != requested_keep_id
+            and duplicate_id in group_prompt_ids
+            and duplicate_id not in used_ids
+        ):
+            duplicate_ids.append(duplicate_id)
+
+    keep_id = _promote_renderable_keep_id(
+        group_prompt_ids,
+        requested_keep_id,
+        duplicate_ids,
+    )
+    cluster_member_ids = [
+        prompt_id
+        for prompt_id in [requested_keep_id, *duplicate_ids]
+        if prompt_id != keep_id
+    ]
+    duplicate_items = _sort_items_by_source_role(
+        [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
+    )
+    return {
+        "requested_keep_id": requested_keep_id,
+        "keep_id": keep_id,
+        "cluster_member_ids": cluster_member_ids,
+        "duplicate_items": duplicate_items,
+    }
+
+
 def _apply_dedupe_response(
     indexed_groups: list[tuple[int, list[CollectedItem]]],
     response_payload: dict[str, Any],
@@ -825,46 +883,25 @@ def _apply_dedupe_response(
         if group_id not in response_group_lookup:
             raise ValueError(f"LLM dedupe response missing group {group_id}")
 
-        group_prompt_ids = {
-            f"{group_id}i{item_index}": item
-            for item_index, item in enumerate(group, start=1)
-        }
+        group_prompt_ids = _build_group_prompt_ids(group_id, group)
         used_ids: set[str] = set()
 
         for cluster in response_group_lookup[group_id]:
-            requested_keep_id = str(cluster.get("keep_id", "")).strip()
-            if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
+            resolved_cluster = _resolve_response_cluster(
+                cluster,
+                group_prompt_ids,
+                used_ids,
+            )
+            if resolved_cluster is None:
                 continue
 
-            duplicate_ids: list[str] = []
-            for raw_duplicate_id in cluster.get("duplicate_ids", []):
-                duplicate_id = str(raw_duplicate_id).strip()
-                if (
-                    duplicate_id
-                    and duplicate_id != requested_keep_id
-                    and duplicate_id in group_prompt_ids
-                    and duplicate_id not in used_ids
-                ):
-                    duplicate_ids.append(duplicate_id)
-
-            keep_id = _promote_renderable_keep_id(
-                group_prompt_ids,
-                requested_keep_id,
-                duplicate_ids,
-            )
-            cluster_member_ids = [
-                prompt_id
-                for prompt_id in [requested_keep_id, *duplicate_ids]
-                if prompt_id != keep_id
-            ]
-            duplicate_items = _sort_items_by_source_role(
-                [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
-            )
+            keep_id = resolved_cluster["keep_id"]
+            cluster_member_ids = resolved_cluster["cluster_member_ids"]
             kept_items.append(
                 _seed_resolved_item(
                     group_prompt_ids[keep_id],
                     keep_id,
-                    duplicate_items=duplicate_items,
+                    duplicate_items=resolved_cluster["duplicate_items"],
                 )
             )
             used_ids.add(keep_id)
@@ -989,10 +1026,7 @@ def _apply_structured_response(
 
     for group_index, group in enumerate(groups, start=1):
         group_id = f"g{group_index}"
-        group_prompt_ids = {
-            f"{group_id}i{item_index}": item
-            for item_index, item in enumerate(group, start=1)
-        }
+        group_prompt_ids = _build_group_prompt_ids(group_id, group)
         group_response = response_group_lookup.get(group_id, {})
         group_clusters = group_response.get("clusters", [])
         off_topic_ids = {
@@ -1004,37 +1038,21 @@ def _apply_structured_response(
         skipped_items += len(off_topic_ids)
 
         for cluster in group_clusters:
-            requested_keep_id = str(cluster.get("keep_id", "")).strip()
-            if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
+            resolved_cluster = _resolve_response_cluster(
+                cluster,
+                group_prompt_ids,
+                used_ids,
+            )
+            if resolved_cluster is None:
                 continue
 
-            duplicate_ids: list[str] = []
-            for raw_duplicate_id in cluster.get("duplicate_ids", []):
-                duplicate_id = str(raw_duplicate_id).strip()
-                if (
-                    duplicate_id
-                    and duplicate_id != requested_keep_id
-                    and duplicate_id in group_prompt_ids
-                    and duplicate_id not in used_ids
-                ):
-                    duplicate_ids.append(duplicate_id)
-
-            keep_id = _promote_renderable_keep_id(
-                group_prompt_ids,
-                requested_keep_id,
-                duplicate_ids,
-            )
+            requested_keep_id = resolved_cluster["requested_keep_id"]
+            keep_id = resolved_cluster["keep_id"]
             if keep_id != requested_keep_id:
                 top_story_aliases[requested_keep_id] = keep_id
             keep_item = cast(ResolvedItem, group_prompt_ids[keep_id])
-            cluster_member_ids = [
-                prompt_id
-                for prompt_id in [requested_keep_id, *duplicate_ids]
-                if prompt_id != keep_id
-            ]
-            duplicate_items = _sort_items_by_source_role(
-                [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
-            )
+            cluster_member_ids = resolved_cluster["cluster_member_ids"]
+            duplicate_items = resolved_cluster["duplicate_items"]
             keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
             keep_item["title"] = _clean_short_title(
                 cluster.get("short_title"),
