@@ -26,6 +26,7 @@ try:
         RSS_USER_AGENT,
     )
     from item_types import CollectedItem, FeedMode, SourceRole
+    from ranking import normalize_feed_mode, normalize_source_role
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import (
         RSS_MAX_FEED_BYTES,
@@ -35,14 +36,11 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         RSS_USER_AGENT,
     )
     from .item_types import CollectedItem, FeedMode, SourceRole
+    from .ranking import normalize_feed_mode, normalize_source_role
 
 logger = logging.getLogger(__name__)
 
 _DAY = timedelta(days=1)
-_VALID_SOURCE_ROLES = frozenset(
-    {"primary", "independent_reporting", "commentary", "community"}
-)
-_VALID_FEED_MODES = frozenset({"core", "discovery_only"})
 
 # Location of feeds configuration file (project root)
 _FEEDS_FILE = Path(__file__).resolve().parent.parent / "feeds.json"
@@ -54,20 +52,6 @@ class CollectionStats(TypedDict):
     feeds_failed: int
     items_collected: int
     feed_errors: list[dict[str, str]]
-
-
-def _normalize_source_role(value: Any) -> SourceRole:
-    source_role = str(value).strip().lower()
-    if source_role in _VALID_SOURCE_ROLES:
-        return source_role
-    return "independent_reporting"
-
-
-def _normalize_feed_mode(value: Any) -> FeedMode:
-    feed_mode = str(value).strip().lower()
-    if feed_mode in _VALID_FEED_MODES:
-        return feed_mode
-    return "core"
 
 
 def _load_feeds() -> dict[str, dict[str, str]]:
@@ -100,8 +84,8 @@ def _load_feeds() -> dict[str, dict[str, str]]:
             logger.warning("Feed %s missing source; using %s", raw_url, source)
 
         source_type = str(raw_meta.get("type", "news")).strip().lower() or "news"
-        source_role = _normalize_source_role(raw_meta.get("source_role"))
-        feed_mode = _normalize_feed_mode(raw_meta.get("feed_mode"))
+        source_role = normalize_source_role(raw_meta.get("source_role"))
+        feed_mode = normalize_feed_mode(raw_meta.get("feed_mode"))
 
         validated[raw_url] = {
             "source": source,
@@ -127,18 +111,10 @@ def _parse_date(entry: dict[str, Any]) -> datetime | None:
     return None
 
 
-def _clean_summary(value: Any) -> str:
+def _clean_html_text(value: Any) -> str:
     if not value:
         return ""
 
-    text = html.unescape(str(value))
-    text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _clean_title(value: Any) -> str:
-    if not value:
-        return ""
     text = html.unescape(str(value))
     text = re.sub(r"<[^>]+>", " ", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -241,7 +217,9 @@ def _fetch_feed_entries(
 
     entries = list(parsed.entries) if hasattr(parsed, "entries") else []
     has_usable_entries = any(
-        _parse_date(entry) and _clean_title(entry.get("title", "")) and str(entry.get("link", "")).strip()
+        _parse_date(entry)
+        and _clean_html_text(entry.get("title", ""))
+        and str(entry.get("link", "")).strip()
         for entry in entries
     )
     ok = not parsed.bozo or has_usable_entries
@@ -298,14 +276,14 @@ def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
             if ts < cutoff:
                 continue
 
-            title = _clean_title(e.get("title", ""))
+            title = _clean_html_text(e.get("title", ""))
             link = str(e.get("link", "")).strip()
             if not (title and link):
                 continue
 
             # Use normalized URL directly as the dedupe key.
             normalized_link = normalize_url(link)
-            summary = _clean_summary(e.get("summary") or e.get("description") or "")
+            summary = _clean_html_text(e.get("summary") or e.get("description") or "")
 
             items.append(
                 {

@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 try:
     from config import DIGEST_STATUS_FILE, LOG_LEVEL
@@ -129,6 +130,31 @@ def _classify_issue_error(reason: str) -> tuple[str, bool]:
     return "unknown", False
 
 
+def _serialize_issue_status_ok(issue_status: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "reason": "ok",
+        "error_kind": "none",
+        "retryable": False,
+        "exists": issue_status["exists"],
+        "issue_number": issue_status["issue_number"],
+        "title": issue_status["title"],
+    }
+
+
+def _serialize_issue_status_error(exc: RuntimeError) -> dict[str, Any]:
+    error_kind, retryable = _classify_issue_error(str(exc))
+    return {
+        "ok": False,
+        "exists": False,
+        "issue_number": None,
+        "title": "",
+        "reason": str(exc),
+        "error_kind": error_kind,
+        "retryable": retryable,
+    }
+
+
 if __name__ == "__main__":
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -190,29 +216,14 @@ if __name__ == "__main__":
         try:
             issue_status = check_issue_status()
         except RuntimeError as exc:
-            error_kind, retryable = _classify_issue_error(str(exc))
-            issue_status = {
-                "ok": False,
-                "exists": False,
-                "issue_number": None,
-                "title": "",
-                "reason": str(exc),
-                "error_kind": error_kind,
-                "retryable": retryable,
-            }
+            issue_status = _serialize_issue_status_error(exc)
             args.issue_status_file.write_text(
                 json.dumps(issue_status, indent=2) + "\n",
                 encoding="utf-8",
             )
             logger.error("Issue preflight failed: %s", exc)
             raise SystemExit(1) from exc
-        issue_status = {
-            "ok": True,
-            "reason": "ok",
-            "error_kind": "none",
-            "retryable": False,
-            **issue_status,
-        }
+        issue_status = _serialize_issue_status_ok(issue_status)
         args.issue_status_file.write_text(
             json.dumps(issue_status, indent=2) + "\n",
             encoding="utf-8",

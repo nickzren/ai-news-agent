@@ -41,6 +41,7 @@ try:
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
+        resolve_repo_output_file,
     )
     from finalize import finalize_items as _finalize_items
     from filterer import deduplicate, exclude_noise
@@ -67,6 +68,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
+        resolve_repo_output_file,
     )
     from .finalize import finalize_items as _finalize_items
     from .filterer import deduplicate, exclude_noise
@@ -94,14 +96,7 @@ _SUMMARY_ABBREVIATION_PATTERN = re.compile(
 )
 
 
-def _resolve_output_file(path_value: str) -> Path:
-    output = Path(path_value)
-    if output.is_absolute():
-        return output
-    return (Path(__file__).resolve().parent.parent / output).resolve()
-
-
-_NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
+_NEWS_FILE = resolve_repo_output_file(DIGEST_OUTPUT_FILE)
 _CANDIDATE_SNAPSHOT_VERSION = 4
 _MAX_PROMPT_SUMMARY_CHARS = 280
 _DUPLICATE_STOP_WORDS = {
@@ -658,13 +653,6 @@ def _fallback_categorize(item: CollectedItem) -> str:
     return str(DEFAULT_CATEGORY)
 
 
-def _is_paper_item(item: CollectedItem) -> bool:
-    source_type = str(item.get("source_type", "")).lower()
-    if source_type == "paper":
-        return True
-    return "papers" in str(item.get("source", "")).lower()
-
-
 def _apply_source_cap(items: list[CollectedItem]) -> tuple[list[CollectedItem], int]:
     if MAX_ITEMS_PER_SOURCE <= 0:
         return items, 0
@@ -1077,14 +1065,7 @@ def _apply_structured_response(
         for prompt_id, item in group_prompt_ids.items():
             if prompt_id in used_ids:
                 continue
-            resolved_item = cast(ResolvedItem, item)
-            resolved_item["title"] = _title_for_matching(item)
-            resolved_item["category"] = _fallback_categorize(item)
-            resolved_item["_prompt_id"] = prompt_id
-            resolved_item["summary_line"] = _fallback_summary_line(item)
-            resolved_item["tier"] = "normal"
-            resolved_item["coverage_sources"] = []
-            kept_items.append(resolved_item)
+            kept_items.append(_seed_resolved_item(item, prompt_id))
 
     state["executive_summary"] = executive_summary
     state["top_stories"] = [top_story_aliases.get(story_id, story_id) for story_id in top_story_ids]
@@ -1183,7 +1164,6 @@ def node_categorize(state: DigestState) -> DigestState:
 
     groups = _build_candidate_groups(items)
     indexed_groups = list(enumerate(groups, start=1))
-    ambiguous_groups = [group for group in groups if len(group) > 1]
     ambiguous_indexed_groups = [
         (group_index, group)
         for group_index, group in indexed_groups
@@ -1197,7 +1177,7 @@ def node_categorize(state: DigestState) -> DigestState:
     logger.info(
         "Built %d candidate groups (%d ambiguous)",
         len(groups),
-        len(ambiguous_groups),
+        len(ambiguous_indexed_groups),
     )
 
     api_key = _get_openai_api_key()
