@@ -9,11 +9,9 @@ from typing import Any
 
 try:
     from config import DIGEST_STATUS_FILE, LOG_LEVEL
-    from graph import apply_decisions_file, build_graph, export_candidate_snapshot
     from publisher import check_issue_status, dispatch_publish_workflow, publish_issue
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import DIGEST_STATUS_FILE, LOG_LEVEL
-    from .graph import apply_decisions_file, build_graph, export_candidate_snapshot
     from .publisher import check_issue_status, dispatch_publish_workflow, publish_issue
 
 
@@ -160,6 +158,11 @@ def _write_json_file(path: Path, payload: Any) -> None:
 
 
 def _run_candidates_only(args: argparse.Namespace, logger: logging.Logger) -> None:
+    try:
+        from graph import export_candidate_snapshot
+    except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+        from .graph import export_candidate_snapshot
+
     snapshot_payload, run_status = export_candidate_snapshot(args.candidates_file)
     _write_json_file(args.status_file, run_status)
     logger.info(
@@ -186,6 +189,11 @@ def _run_candidates_only(args: argparse.Namespace, logger: logging.Logger) -> No
 
 
 def _run_apply_decisions(args: argparse.Namespace, logger: logging.Logger) -> None:
+    try:
+        from graph import apply_decisions_file
+    except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+        from .graph import apply_decisions_file
+
     apply_decisions_file(args.apply_decisions, args.candidates_file)
     logger.info("news.md generated successfully from agent decisions")
 
@@ -236,6 +244,11 @@ def _run_check_issue(args: argparse.Namespace, logger: logging.Logger) -> None:
 
 
 def _run_default_graph(logger: logging.Logger) -> None:
+    try:
+        from graph import build_graph
+    except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+        from .graph import build_graph
+
     graph = build_graph()
     graph.invoke({})
     logger.info("news.md generated successfully")
