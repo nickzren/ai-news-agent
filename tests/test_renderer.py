@@ -151,6 +151,58 @@ def test_to_markdown_uses_compact_lines_without_summary_text():
     assert "- [Compact Item](https://example.com/1) — Source A (3 sources)" in result
 
 
+def test_to_markdown_renders_summary_line_under_top_story_only():
+    items = [
+        {
+            "title": "Top Story",
+            "link": "https://example.com/top",
+            "source": "Source A",
+            "category": "Breaking News",
+            "summary_line": "Why this top story matters.",
+            "_prompt_id": "item-1",
+            "published": datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+        },
+        {
+            "title": "Regular Story",
+            "link": "https://example.com/regular",
+            "source": "Source B",
+            "category": "Breaking News",
+            "summary_line": "Category summary stays hidden.",
+            "_prompt_id": "item-2",
+            "published": datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
+        },
+    ]
+
+    result = to_markdown(items, top_stories=["item-1"])
+
+    assert (
+        "- **[Top Story](https://example.com/top)** — Source A<br>\n"
+        "  Why this top story matters." in result
+    )
+    assert "Category summary stays hidden." not in result
+
+
+def test_to_markdown_top_story_without_summary_line_stays_compact():
+    items = [
+        {
+            "title": "Top Story",
+            "link": "https://example.com/top",
+            "source": "Source A",
+            "category": "Breaking News",
+            "_prompt_id": "item-1",
+            "published": datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+        },
+    ]
+
+    result = to_markdown(items, top_stories=["item-1"])
+
+    assert result == (
+        "## Daily AI / LLM Headlines\n\n"
+        "### Top Stories\n"
+        "- **[Top Story](https://example.com/top)** — Source A\n"
+    )
+
+
 def test_to_markdown_does_not_repeat_top_story_in_category_sections():
     items = [
         {
