@@ -3,9 +3,27 @@
 import base64
 import gzip
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import publisher
+
+_FROZEN_NOW = datetime(2026, 4, 13, 16, 0, tzinfo=timezone.utc)
+_CREATED_TODAY = "2026-04-13T15:00:00Z"
+_CREATED_YESTERDAY = "2026-04-12T15:00:00Z"
+_BASE_TITLE = "AI Headlines - Apr 13"
+_TOP_STORY_BODY = (
+    "## Daily AI / LLM Headlines\n\n"
+    "### Top Stories\n"
+    "- **[Bezos' Prometheus raises $12B](https://example.com/prometheus)** — TechCrunch (2 sources)\n"
+    "- **[Second story](https://example.com/second)** — Wired AI\n\n"
+    "### Industry & Business\n"
+    "- [Plain bullet](https://example.com/plain) — Source\n"
+)
+
+
+def _freeze_now(monkeypatch):
+    monkeypatch.setattr(publisher, "_utcnow", lambda: _FROZEN_NOW)
 
 
 class _FakeResponse:
@@ -24,10 +42,10 @@ class _FakeResponse:
 
 def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
     news_file = tmp_path / "news.md"
-    news_file.write_text("hello world", encoding="utf-8")
+    news_file.write_text(_TOP_STORY_BODY, encoding="utf-8")
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     calls: list[tuple[str, str, object | None]] = []
     monkeypatch.setattr(
@@ -37,6 +55,7 @@ def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
             {
                 "number": 12,
                 "title": "AI Headlines – 2026-04-13",
+                "createdAt": _CREATED_TODAY,
                 "labels": [{"name": "ai-digest"}],
             }
         ],
@@ -55,13 +74,16 @@ def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
     assert result == {
         "action": "updated",
         "issue_number": 12,
-        "title": "AI Headlines – 2026-04-13",
+        "title": f"{_BASE_TITLE}: Bezos' Prometheus raises $12B",
     }
     assert calls == [
         (
             "PATCH",
             "/repos/nickzren/ai-news-agent/issues/12",
-            {"body": "hello world"},
+            {
+                "title": f"{_BASE_TITLE}: Bezos' Prometheus raises $12B",
+                "body": _TOP_STORY_BODY,
+            },
         )
     ]
 
@@ -69,7 +91,7 @@ def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
 def test_check_issue_status_finds_existing_issue(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     monkeypatch.setattr(
         publisher,
@@ -77,7 +99,8 @@ def test_check_issue_status_finds_existing_issue(monkeypatch):
         lambda owner, repo: [
             {
                 "number": 12,
-                "title": "AI Headlines – 2026-04-13",
+                "title": f"{_BASE_TITLE}: Some headline",
+                "createdAt": _CREATED_TODAY,
                 "labels": [{"name": "ai-digest"}],
             }
         ],
@@ -88,19 +111,21 @@ def test_check_issue_status_finds_existing_issue(monkeypatch):
     assert result == {
         "exists": True,
         "issue_number": 12,
-        "title": "AI Headlines – 2026-04-13",
+        "title": f"{_BASE_TITLE}: Some headline",
     }
 
 
-def test_check_issue_status_ignores_unlabeled_matching_title(monkeypatch):
+def test_check_issue_status_ignores_unlabeled_issue(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     monkeypatch.setattr(
         publisher,
         "_list_open_issues",
-        lambda owner, repo: [{"number": 12, "title": "AI Headlines – 2026-04-13", "labels": []}],
+        lambda owner, repo: [
+            {"number": 12, "title": _BASE_TITLE, "createdAt": _CREATED_TODAY, "labels": []}
+        ],
     )
 
     result = publisher.check_issue_status()
@@ -108,14 +133,41 @@ def test_check_issue_status_ignores_unlabeled_matching_title(monkeypatch):
     assert result == {
         "exists": False,
         "issue_number": None,
-        "title": "AI Headlines – 2026-04-13",
+        "title": _BASE_TITLE,
+    }
+
+
+def test_check_issue_status_ignores_issue_created_on_other_day(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
+    _freeze_now(monkeypatch)
+
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues",
+        lambda owner, repo: [
+            {
+                "number": 11,
+                "title": "AI Headlines - Apr 12: Old story",
+                "createdAt": _CREATED_YESTERDAY,
+                "labels": [{"name": "ai-digest"}],
+            }
+        ],
+    )
+
+    result = publisher.check_issue_status()
+
+    assert result == {
+        "exists": False,
+        "issue_number": None,
+        "title": _BASE_TITLE,
     }
 
 
 def test_check_issue_status_uses_lowest_issue_number_for_duplicates(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     monkeypatch.setattr(
         publisher,
@@ -123,12 +175,14 @@ def test_check_issue_status_uses_lowest_issue_number_for_duplicates(monkeypatch)
         lambda owner, repo: [
             {
                 "number": 13,
-                "title": "AI Headlines – 2026-04-13",
+                "title": f"{_BASE_TITLE}: Later duplicate",
+                "createdAt": _CREATED_TODAY,
                 "labels": [{"name": "ai-digest"}],
             },
             {
                 "number": 12,
-                "title": "AI Headlines – 2026-04-13",
+                "title": f"{_BASE_TITLE}: First issue",
+                "createdAt": _CREATED_TODAY,
                 "labels": [{"name": "ai-digest"}],
             },
         ],
@@ -139,14 +193,14 @@ def test_check_issue_status_uses_lowest_issue_number_for_duplicates(monkeypatch)
     assert result == {
         "exists": True,
         "issue_number": 12,
-        "title": "AI Headlines – 2026-04-13",
+        "title": f"{_BASE_TITLE}: First issue",
     }
 
 
 def test_check_issue_status_reports_missing_issue(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     monkeypatch.setattr(publisher, "_list_open_issues", lambda owner, repo: [])
 
@@ -155,7 +209,7 @@ def test_check_issue_status_reports_missing_issue(monkeypatch):
     assert result == {
         "exists": False,
         "issue_number": None,
-        "title": "AI Headlines – 2026-04-13",
+        "title": _BASE_TITLE,
     }
 
 
@@ -165,7 +219,7 @@ def test_publish_issue_creates_new_issue(tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "test-token")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     calls: list[tuple[str, str, object | None]] = []
     monkeypatch.setattr(publisher, "_list_open_issues", lambda owner, repo: [])
@@ -183,19 +237,71 @@ def test_publish_issue_creates_new_issue(tmp_path, monkeypatch):
     assert result == {
         "action": "created",
         "issue_number": 34,
-        "title": "AI Headlines – 2026-04-13",
+        "title": _BASE_TITLE,
     }
     assert calls == [
         (
             "POST",
             "/repos/nickzren/ai-news-agent/issues",
             {
-                "title": "AI Headlines – 2026-04-13",
+                "title": _BASE_TITLE,
                 "body": "hello world",
                 "labels": ["ai-digest"],
             },
         )
     ]
+
+
+def test_publish_issue_creates_new_issue_with_top_story_title(tmp_path, monkeypatch):
+    news_file = tmp_path / "news.md"
+    news_file.write_text(_TOP_STORY_BODY, encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
+    _freeze_now(monkeypatch)
+
+    calls: list[tuple[str, str, object | None]] = []
+    monkeypatch.setattr(publisher, "_list_open_issues", lambda owner, repo: [])
+
+    def fake_request(method: str, path: str, payload=None):
+        calls.append((method, path, payload))
+        if method == "POST":
+            return {"number": 35}
+        raise AssertionError(f"unexpected call: {method} {path}")
+
+    monkeypatch.setattr(publisher, "_github_api_request", fake_request)
+
+    result = publisher.publish_issue(news_file)
+
+    assert result == {
+        "action": "created",
+        "issue_number": 35,
+        "title": f"{_BASE_TITLE}: Bezos' Prometheus raises $12B",
+    }
+    assert calls[0][2]["title"] == f"{_BASE_TITLE}: Bezos' Prometheus raises $12B"
+
+
+def test_leading_top_story_parses_first_bold_bullet():
+    assert publisher._leading_top_story(_TOP_STORY_BODY) == "Bezos' Prometheus raises $12B"
+
+
+def test_leading_top_story_empty_without_bold_bullet():
+    assert publisher._leading_top_story("- [Plain bullet](https://example.com) — Source") == ""
+
+
+def test_leading_top_story_truncates_long_headline():
+    headline = "A" * 150
+    body = f"- **[{headline}](https://example.com)** — Source"
+
+    story = publisher._leading_top_story(body)
+
+    assert len(story) == 100
+    assert story.endswith("…")
+
+
+def test_issue_title_for_body_prefers_override(monkeypatch):
+    monkeypatch.setenv("DIGEST_ISSUE_TITLE_OVERRIDE", "Override Title")
+
+    assert publisher._issue_title_for_body(_TOP_STORY_BODY) == "Override Title"
 
 
 def test_publish_issue_requires_token(tmp_path, monkeypatch):
@@ -226,7 +332,7 @@ def test_check_issue_status_falls_back_to_gh_cli(monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     def fake_run(command, input=None, text=None, capture_output=None, check=None, env=None):
         assert command == [
@@ -240,12 +346,15 @@ def test_check_issue_status_falls_back_to_gh_cli(monkeypatch):
             "--limit",
             "1000",
             "--json",
-            "number,title,labels",
+            "number,title,labels,createdAt",
         ]
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout='[{"number": 12, "title": "AI Headlines – 2026-04-13", "labels": [{"name": "ai-digest"}]}]',
+            stdout=(
+                '[{"number": 12, "title": "AI Headlines - Apr 13: Some headline", '
+                f'"createdAt": "{_CREATED_TODAY}", "labels": [{{"name": "ai-digest"}}]}}]'
+            ),
             stderr="",
         )
 
@@ -256,7 +365,7 @@ def test_check_issue_status_falls_back_to_gh_cli(monkeypatch):
     assert result == {
         "exists": True,
         "issue_number": 12,
-        "title": "AI Headlines – 2026-04-13",
+        "title": "AI Headlines - Apr 13: Some headline",
     }
 
 
@@ -266,7 +375,7 @@ def test_publish_issue_uses_gh_cli_when_no_token(tmp_path, monkeypatch):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     calls: list[tuple[list[str], str | None]] = []
 
@@ -275,7 +384,7 @@ def test_publish_issue_uses_gh_cli_when_no_token(tmp_path, monkeypatch):
         if command[:3] == ["gh", "issue", "list"]:
             return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
         if command[2] == "/repos/nickzren/ai-news-agent/issues":
-            assert input == '{"title": "AI Headlines \\u2013 2026-04-13", "body": "hello world", "labels": ["ai-digest"]}'
+            assert input == '{"title": "AI Headlines - Apr 13", "body": "hello world", "labels": ["ai-digest"]}'
             return subprocess.CompletedProcess(command, 0, stdout='{"number": 34}', stderr="")
         raise AssertionError(f"unexpected command: {command}")
 
@@ -286,7 +395,7 @@ def test_publish_issue_uses_gh_cli_when_no_token(tmp_path, monkeypatch):
     assert result == {
         "action": "created",
         "issue_number": 34,
-        "title": "AI Headlines – 2026-04-13",
+        "title": _BASE_TITLE,
     }
     assert len(calls) == 2
 
@@ -362,7 +471,8 @@ def test_list_open_issues_via_graphql_token_paginates(monkeypatch):
                         "nodes": [
                             {
                                 "number": 13,
-                                "title": "AI Headlines – 2026-04-13",
+                                "title": "AI Headlines - Apr 13: Story",
+                                "createdAt": _CREATED_TODAY,
                                 "labels": {"nodes": [{"name": "ai-digest"}]},
                             }
                         ],
@@ -376,7 +486,8 @@ def test_list_open_issues_via_graphql_token_paginates(monkeypatch):
                     "nodes": [
                         {
                             "number": 12,
-                            "title": "AI Headlines – 2026-04-12",
+                            "title": "AI Headlines - Apr 12: Story",
+                            "createdAt": _CREATED_YESTERDAY,
                             "labels": {"nodes": [{"name": "ai-digest"}]},
                         }
                     ],
@@ -397,12 +508,14 @@ def test_list_open_issues_via_graphql_token_paginates(monkeypatch):
     assert issues == [
         {
             "number": 13,
-            "title": "AI Headlines – 2026-04-13",
+            "title": "AI Headlines - Apr 13: Story",
+            "createdAt": _CREATED_TODAY,
             "labels": [{"name": "ai-digest"}],
         },
         {
             "number": 12,
-            "title": "AI Headlines – 2026-04-12",
+            "title": "AI Headlines - Apr 12: Story",
+            "createdAt": _CREATED_YESTERDAY,
             "labels": [{"name": "ai-digest"}],
         },
     ]
@@ -475,7 +588,7 @@ def test_check_issue_status_falls_back_to_gh_when_token_auth_fails(monkeypatch):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
     monkeypatch.setattr(
         publisher,
         "_list_open_issues_via_graphql_token",
@@ -487,7 +600,12 @@ def test_check_issue_status_falls_back_to_gh_when_token_auth_fails(monkeypatch):
         publisher,
         "_list_open_issues_via_gh",
         lambda owner, repo: [
-            {"number": 12, "title": "AI Headlines – 2026-04-13", "labels": ["ai-digest"]}
+            {
+                "number": 12,
+                "title": _BASE_TITLE,
+                "createdAt": _CREATED_TODAY,
+                "labels": ["ai-digest"],
+            }
         ],
     )
 
@@ -496,7 +614,7 @@ def test_check_issue_status_falls_back_to_gh_when_token_auth_fails(monkeypatch):
     assert result == {
         "exists": True,
         "issue_number": 12,
-        "title": "AI Headlines – 2026-04-13",
+        "title": _BASE_TITLE,
     }
 
 
@@ -510,10 +628,10 @@ def test_encode_dispatch_body_round_trips():
 
 def test_dispatch_publish_workflow_posts_dispatch_payload(tmp_path, monkeypatch):
     news_file = tmp_path / "news.md"
-    news_file.write_text("hello world", encoding="utf-8")
+    news_file.write_text(_TOP_STORY_BODY, encoding="utf-8")
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     calls: list[tuple[str, str, object | None]] = []
 
@@ -528,7 +646,7 @@ def test_dispatch_publish_workflow_posts_dispatch_payload(tmp_path, monkeypatch)
     assert result == {
         "workflow": "publish-digest.yml",
         "ref": "main",
-        "title": "AI Headlines – 2026-04-13",
+        "title": f"{_BASE_TITLE}: Bezos' Prometheus raises $12B",
     }
     assert calls == [
         (
@@ -537,8 +655,8 @@ def test_dispatch_publish_workflow_posts_dispatch_payload(tmp_path, monkeypatch)
             {
                 "ref": "main",
                 "inputs": {
-                    "issue_title": "AI Headlines – 2026-04-13",
-                    "issue_body_gz_b64": publisher._encode_dispatch_body("hello world"),
+                    "issue_title": f"{_BASE_TITLE}: Bezos' Prometheus raises $12B",
+                    "issue_body_gz_b64": publisher._encode_dispatch_body(_TOP_STORY_BODY),
                 },
             },
         )
@@ -553,7 +671,7 @@ def test_dispatch_publish_workflow_token_path_accepts_empty_response(tmp_path, m
     monkeypatch.delenv("DIGEST_GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_REPOSITORY", "nickzren/ai-news-agent")
-    monkeypatch.setattr(publisher, "_today_issue_title", lambda: "AI Headlines – 2026-04-13")
+    _freeze_now(monkeypatch)
 
     calls = []
 
@@ -568,7 +686,7 @@ def test_dispatch_publish_workflow_token_path_accepts_empty_response(tmp_path, m
     assert result == {
         "workflow": "publish-digest.yml",
         "ref": "main",
-        "title": "AI Headlines – 2026-04-13",
+        "title": _BASE_TITLE,
     }
     assert calls[0][0] == "POST"
     assert calls[0][1] == (
