@@ -1,0 +1,31 @@
+<svg viewBox="0 0 720 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Example of the daily digest email">
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="1"/>
+    </linearGradient>
+  </defs>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <rect x="20" y="14" width="680" height="440" rx="12" fill="#ffffff" stroke="#d0d7de"/>
+
+    <text x="48" y="54" font-size="17" font-weight="600" fill="#1f2328">AI Headlines – 2026-06-12</text>
+    <text x="48" y="78" font-size="12.5" fill="#59636e">GitHub &lt;notifications@github.com&gt;</text>
+    <line x1="48" y1="98" x2="672" y2="98" stroke="#d8dee4"/>
+
+    <text x="48" y="132" font-size="15.5" font-weight="700" fill="#1f2328">Daily AI / LLM Headlines</text>
+
+    <text x="48" y="164" font-size="13.5" font-weight="700" fill="#1f2328">Top Stories</text>
+    <text x="56" y="190" font-size="13" fill="#0969da" font-weight="600">•  Bezos' Prometheus raises $12B<tspan fill="#59636e" font-weight="400"> — TechCrunch (2 sources)</tspan></text>
+    <text x="56" y="214" font-size="13" fill="#0969da" font-weight="600">•  OpenAI coding lead reshapes ChatGPT<tspan fill="#59636e" font-weight="400"> — Wired AI</tspan></text>
+
+    <text x="48" y="252" font-size="13.5" font-weight="700" fill="#1f2328">Industry &amp; Business</text>
+    <text x="56" y="278" font-size="13" fill="#0969da">•  Theker raises $85M for adaptable robots<tspan fill="#59636e"> — TechCrunch</tspan></text>
+    <text x="56" y="302" font-size="13" fill="#0969da">•  AWS ProServe rebuilds around AI<tspan fill="#59636e"> — AWS Machine Learning</tspan></text>
+
+    <text x="48" y="340" font-size="13.5" font-weight="700" fill="#1f2328">Tools &amp; Applications</text>
+    <text x="56" y="366" font-size="13" fill="#0969da">•  Apple explains AI camera features<tspan fill="#59636e"> — Wired AI</tspan></text>
+    <text x="56" y="390" font-size="13" fill="#0969da">•  Meta donates AI glasses to blind veterans<tspan fill="#59636e"> — Meta AI</tspan></text>
+
+    <rect x="22" y="350" width="676" height="102" rx="11" fill="url(#fade)"/>
+  </g>
+</svg>
