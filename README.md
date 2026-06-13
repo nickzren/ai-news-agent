@@ -26,7 +26,7 @@ From the **June 12, 2026** digest:
 - **[Apple explains AI camera features](https://www.wired.com/story/apple-camera-chief-thinks-ai-can-give-you-superpowers/)** — Wired AI
 - **[Pokemon Go data drew military AI scrutiny](https://arstechnica.com/ai/2026/06/pokemon-go-players-unwittingly-contributed-to-tech-with-military-drone-uses/)** — Ars Technica
 
-Each digest leads with the day's top stories, then groups the rest by topic — Industry & Business, Tools & Applications, Policy & Ethics — so you can skim straight to what interests you.
+Each digest leads with a compact list of top stories, then groups the rest by topic — Industry & Business, Tools & Applications, Policy & Ethics — so you can skim straight to what interests you.
 
 ## How it works
 

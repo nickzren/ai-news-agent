@@ -79,7 +79,7 @@ Use `off_topic_ids` to drop low-signal or off-topic items from a group. For sing
 
 `--dispatch-publish` sends the rendered digest to the publish-only GitHub Actions workflow so the final issue author is `app/github-actions`, which is friendlier to watch-email notifications than publishing through your own local GitHub identity.
 
-The default digest output is compact and title-first. `summary_line` renders as one indented line under each Top Story; category sections stay title-only, and `executive_summary` is not rendered. The published issue title appends the leading top story, e.g. `AI Headlines - Jun 12: Bezos' Prometheus raises $12B`, while same-day deduplication matches on the `ai-digest` label and creation date rather than the title.
+The default digest output is compact and title-first. `summary_line` and `executive_summary` are kept as decision metadata and are not rendered in the issue body. The published issue title appends the leading top story, e.g. `AI Headlines - Jun 12: Bezos' Prometheus raises $12B`, while same-day deduplication matches on the `ai-digest` label and creation date rather than the title.
 
 ## Feed configuration
 

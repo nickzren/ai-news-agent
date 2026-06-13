@@ -151,7 +151,7 @@ def test_to_markdown_uses_compact_lines_without_summary_text():
     assert "- [Compact Item](https://example.com/1) — Source A (3 sources)" in result
 
 
-def test_to_markdown_renders_summary_line_under_top_story_only():
+def test_to_markdown_hides_summary_line_for_top_stories():
     items = [
         {
             "title": "Top Story",
@@ -175,10 +175,8 @@ def test_to_markdown_renders_summary_line_under_top_story_only():
 
     result = to_markdown(items, top_stories=["item-1"])
 
-    assert (
-        "- **[Top Story](https://example.com/top)** — Source A<br>\n"
-        "  Why this top story matters." in result
-    )
+    assert "- **[Top Story](https://example.com/top)** — Source A" in result
+    assert "Why this top story matters." not in result
     assert "Category summary stays hidden." not in result
 
 
