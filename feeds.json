@@ -24,7 +24,7 @@
     "source": "Hugging Face",
     "source_role": "primary"
   },
-  "https://blogs.microsoft.com/ai/feed/": {
+  "https://news.microsoft.com/source/tag/ai/feed/": {
     "category": "All",
     "source": "Microsoft AI",
     "source_role": "primary"
