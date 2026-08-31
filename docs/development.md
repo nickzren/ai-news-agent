@@ -20,6 +20,8 @@ cp .env.example .env
 # Placeholder values such as sk-... or your_api_key_here are treated as missing
 ```
 
+The default API fallback model is `gpt-5.6-luna`. Set `OPENAI_MODEL` to override it.
+
 ### 3. Run
 
 ```bash
