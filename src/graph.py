@@ -970,10 +970,16 @@ def _apply_enrichment_response(
         enriched_items.append(item)
         seen_ids.add(item_id)
 
-    for item_id, item in item_lookup.items():
-        if item_id in seen_ids or item_id in off_topic_ids:
-            continue
-        enriched_items.append(item)
+    unaccounted_ids = sorted(
+        item_id
+        for item_id in item_lookup
+        if item_id not in seen_ids and item_id not in off_topic_ids
+    )
+    if unaccounted_ids:
+        raise ValueError(
+            "LLM enrichment response did not account for "
+            f"{len(unaccounted_ids)} candidate(s): {', '.join(unaccounted_ids)}"
+        )
 
     state["executive_summary"] = executive_summary
     state["top_stories"] = top_story_ids
@@ -1377,15 +1383,15 @@ def node_categorize(state: DigestState) -> DigestState:
             distinct_indexed_groups,
         )
     except Exception as exc:
+        # Deliberately broad. Once an API call has been attempted, any failure -- quota,
+        # timeout, connection, malformed response -- must stop the run. Falling back to
+        # heuristic categorization here would publish a digest that looks model-written
+        # but is not. Narrowing this to specific error codes reintroduces that bug.
         logger.error(
-            "Categorization error: %s. Falling back to local duplicate resolution.",
+            "Categorization failed after an attempted OpenAI call: %s. Refusing to publish.",
             exc,
         )
-        return _finalize_local_categorization(
-            state,
-            groups,
-            log_label="After local categorization",
-        )
+        raise
 
 
 def node_render(state: DigestState) -> DigestState:
