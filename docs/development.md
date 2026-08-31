@@ -30,7 +30,7 @@ uv run python src/main.py
 
 ## CI and scheduled runs
 
-Scheduled GitHub Actions runs check for today's digest issue before calling the LLM, so fallback CI skips duplicate builds. Push and pull request CI runs `pytest` and `mypy`. Scheduled agent runs generate locally and dispatch the final publish through GitHub Actions. Direct `--publish-issue` remains a manual fallback.
+Scheduled GitHub Actions fallback runs target 12:30 PM `America/New_York` and use that timezone when matching today's digest issue and generating its title. This keeps DST changes and delayed runs from shifting the digest to the wrong calendar day. The fallback checks for the issue before calling the LLM, so it skips duplicate builds. Manual workflow dispatch intentionally bypasses that scheduled preflight. Push and pull request CI runs `pytest` and `mypy`. Scheduled agent runs generate locally and dispatch the final publish through GitHub Actions. Direct `--publish-issue` remains a manual fallback.
 
 ## Agent-driven mode
 
