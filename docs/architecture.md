@@ -72,7 +72,8 @@ flowchart LR
     P -- Codex / Claude --> X[Write digest-candidates.json]
     X --> Y[Agent writes digest-decisions.json]
     Y --> Z[Apply decisions]
-    L --> W[Render + write news.md]
+    L -- Success --> W[Render + write news.md]
+    L -- Attempted call failed --> F[Stop: fail closed, nothing published]
     R --> W
     Z --> W
 ```
@@ -91,5 +92,6 @@ flowchart LR
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
 - When fallback top stories are auto-selected, the digest prefers category diversity before repeating the same lane.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
+- Categorization has three outcomes. A successful API call publishes model output. A missing `OPENAI_API_KEY` may proceed with local heuristic categorization, which is the intentional manual path. An API call that was attempted and then failed — quota, timeout, connection, malformed response, or a response that omits candidates from both `items` and `off_topic_ids` — raises, so nothing is rendered or published. Heuristic output is never published as though it came from the model.
 - `--dispatch-publish` triggers `.github/workflows/publish-digest.yml` with a compressed digest payload, and that workflow runs the repo-local `--publish-issue` path on GitHub Actions. Direct `--publish-issue` remains a manual fallback.
 - Short display titles are generated only for kept items after duplicates are resolved.
