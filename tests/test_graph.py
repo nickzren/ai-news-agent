@@ -689,6 +689,76 @@ def test_node_categorize_drops_off_topic_items_in_enrichment_response(monkeypatc
     assert result["top_stories"] == ["g1i1"]
 
 
+def test_node_categorize_raises_when_openai_request_fails(monkeypatch):
+    """An attempted API call that fails must never degrade to heuristic output."""
+    items = [
+        _item("a", "OpenAI launches study mode for ChatGPT", 12, source="OpenAI"),
+        _item("b", "Anthropic releases new enterprise controls", 11, source="Anthropic"),
+    ]
+
+    def fail(_client, _prompt: str) -> str:
+        raise RuntimeError("credit_balance_exhausted")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(graph, "_chat_completion_text", fail)
+
+    with pytest.raises(RuntimeError, match="credit_balance_exhausted"):
+        node_categorize({"items": items})
+
+
+def test_node_categorize_raises_when_response_omits_candidates(monkeypatch):
+    """A well-formed response that silently drops candidates must fail closed."""
+    items = [
+        _item("a", "OpenAI launches study mode for ChatGPT", 12, source="OpenAI"),
+        _item("b", "Anthropic releases new enterprise controls", 11, source="Anthropic"),
+    ]
+    enrichment_response = {
+        "executive_summary": "",
+        "top_stories": [],
+        "items": [],
+    }
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(
+        graph,
+        "_chat_completion_text",
+        lambda _client, _prompt: json.dumps(enrichment_response),
+    )
+
+    with pytest.raises(ValueError, match="did not account for"):
+        node_categorize({"items": items})
+
+
+def test_full_graph_does_not_reach_render_when_openai_request_fails(monkeypatch):
+    """Render and its downstream publish path must be unreachable after an API failure."""
+    items = [
+        _item("a", "OpenAI launches study mode for ChatGPT", 12, source="OpenAI"),
+        _item("b", "Anthropic releases new enterprise controls", 11, source="Anthropic"),
+    ]
+    rendered: list[str] = []
+
+    def fail(_client, _prompt: str) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(graph, "_chat_completion_text", fail)
+    monkeypatch.setattr(graph, "node_collect", lambda _state: {"items": items})
+    monkeypatch.setattr(graph, "node_filter", lambda state: state)
+    monkeypatch.setattr(
+        graph,
+        "node_render",
+        lambda state: rendered.append("rendered") or state,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        build_graph().invoke({"items": []})
+
+    assert rendered == []
+
+
 def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
     """Local fallback should keep originals and drop obvious duplicates."""
     items = [
@@ -931,7 +1001,8 @@ def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch
     assert result["items"][0]["category"] == "Tools & Applications"
 
 
-def test_node_categorize_timeout_uses_local_resolution(monkeypatch):
+def test_node_categorize_timeout_raises_instead_of_local_resolution(monkeypatch):
+    """A timeout is an attempted call, so it fails closed rather than degrading."""
     items = [
         _item("a", "OpenAI launches realtime coding assistant for developers", 12, source="OpenAI"),
         _item("b", "OpenAI launches realtime coding assistant for enterprise developers", 11, source="TechCrunch"),
@@ -947,10 +1018,8 @@ def test_node_categorize_timeout_uses_local_resolution(monkeypatch):
 
     monkeypatch.setattr(graph, "_chat_completion_text", raise_timeout)
 
-    result = node_categorize({"items": items})
-
-    assert len(result["items"]) == 1
-    assert result["items"][0]["title"] == "OpenAI launches realtime coding assistant for developers"
+    with pytest.raises(APITimeoutError):
+        node_categorize({"items": items})
 
 
 def test_apply_decisions_file_renders_from_candidate_snapshot(tmp_path, monkeypatch):
