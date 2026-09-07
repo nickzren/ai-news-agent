@@ -56,6 +56,22 @@ Agent decisions should use this JSON shape:
 
 ```json
 {
+  "schema_version": 2,
+  "kind": "ai-news-agent.decisions",
+  "snapshot_id": "sha256:<copy exactly from digest-candidates.json>",
+  "executive_summary": "2-3 sentence overview of today's AI news.",
+  "top_stories": ["g1i1"],
+  "groups": []
+}
+```
+
+The empty `groups` skeleton above is valid only for a candidate snapshot with no groups; it is invalid for every nonempty snapshot. Every candidate group must appear exactly once, and every candidate item must be dispositioned exactly once as a keep, duplicate, or off-topic item. For example, given `g1i1` as a kept singleton, `g2i1` and `g2i2` as duplicate coverage of one story, and `g3i1` as off-topic, the exhaustive decisions are:
+
+```json
+{
+  "schema_version": 2,
+  "kind": "ai-news-agent.decisions",
+  "snapshot_id": "sha256:<copy exactly from digest-candidates.json>",
   "executive_summary": "2-3 sentence overview of today's AI news.",
   "top_stories": ["g1i1"],
   "groups": [
@@ -65,19 +81,38 @@ Agent decisions should use this JSON shape:
       "clusters": [
         {
           "keep_id": "g1i1",
-          "duplicate_ids": ["g1i2"],
+          "duplicate_ids": [],
           "category": "Tools & Applications",
           "short_title": "OpenAI launches coding assistant",
           "summary_line": "Why this matters in one sentence.",
           "tier": "high"
         }
       ]
+    },
+    {
+      "group_id": "g2",
+      "off_topic_ids": [],
+      "clusters": [
+        {
+          "keep_id": "g2i1",
+          "duplicate_ids": ["g2i2"],
+          "category": "Models & Research",
+          "short_title": "Researchers release a new reasoning model",
+          "summary_line": "Why this matters in one sentence.",
+          "tier": "medium"
+        }
+      ]
+    },
+    {
+      "group_id": "g3",
+      "off_topic_ids": ["g3i1"],
+      "clusters": []
     }
   ]
 }
 ```
 
-Use `off_topic_ids` to drop low-signal or off-topic items from a group. For singleton groups, set `clusters` to `[]` and list the item id in `off_topic_ids`.
+Every cluster must contain a list-valued `duplicate_ids`; use `[]` for a kept singleton. A standalone `discovery_only` item is valid decision input and must still be represented as an explicit singleton keep, but it is removed later during rendering. Decisions are fully validated, including snapshot binding and exhaustive dispositions, before any keep is promoted. Stale or partial decisions invalidate and remove any prior generated `news.md`, then stop before rendering or dispatch.
 
 `--dispatch-publish` sends the rendered digest to the publish-only GitHub Actions workflow so the final issue author is `app/github-actions`, which is friendlier to watch-email notifications than publishing through your own local GitHub identity.
 

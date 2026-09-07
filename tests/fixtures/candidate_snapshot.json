@@ -1,6 +1,7 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "kind": "ai-news-agent.candidates",
+  "snapshot_id": "sha256:d0a86aad82478b7c6d80b397115016a52160f3e2efcab3543b05fe495a954227",
   "categories": [
     "Breaking News",
     "Industry & Business",

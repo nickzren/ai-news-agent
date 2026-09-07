@@ -70,8 +70,10 @@ flowchart LR
     K1 -- Yes --> L[OpenAI dedupe + categorize]
     K1 -- No --> R[Local duplicate resolution + fallback categorization]
     P -- Codex / Claude --> X[Write digest-candidates.json]
-    X --> Y[Agent writes digest-decisions.json]
-    Y --> Z[Apply decisions]
+    X --> Y[Agent writes exhaustive decisions v2]
+    Y --> V{Snapshot binding and dispositions valid?}
+    V -- Yes --> Z[Apply decisions]
+    V -- No --> F[Stop: fail closed, nothing published]
     L -- Success --> W[Render + write news.md]
     L -- Attempted call failed --> F[Stop: fail closed, nothing published]
     R --> W
@@ -87,6 +89,7 @@ flowchart LR
 - A per-source cap is applied before LLM dedupe for diversity and lower cost.
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
 - Candidate export also writes `digest-run-status.json` with feed health, group counts, and sample `feed_errors` for automation use.
+- Candidate schema v5 binds decisions schema v2 through the exact exported `snapshot_id`. Decisions must include every candidate group and disposition every item exactly once. Validation completes before keep promotion; only afterward does rendering remove standalone `discovery_only` keeps.
 - `--check-issue` writes `digest-issue-status.json` through the same repo-local GitHub path used for publishing, preferring authenticated `gh` locally and `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` in GitHub Actions. On failure it still writes a status artifact with `ok: false`, a `reason`, an `error_kind`, and a `retryable` flag so automation can distinguish transient GitHub failures from hard auth/config errors.
 - `--candidates-only` exits nonzero only when feed health is bad enough to make the snapshot unreliable. Healthy empty days are reported as `reason: "no_fresh_items"` without failing.
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
