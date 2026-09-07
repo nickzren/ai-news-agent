@@ -1,4 +1,7 @@
 {
+  "schema_version": 2,
+  "kind": "ai-news-agent.decisions",
+  "snapshot_id": "sha256:d0a86aad82478b7c6d80b397115016a52160f3e2efcab3543b05fe495a954227",
   "executive_summary": "OpenAI launched a new coding assistant for developers.",
   "top_stories": ["g1i1"],
   "groups": [
