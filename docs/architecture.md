@@ -76,8 +76,8 @@ flowchart LR
     Y --> V{Snapshot binding and dispositions valid?}
     V -- Yes --> Z[Apply decisions]
     V -- No --> F[Stop: fail closed, nothing published]
-    L -- Success --> W[Render + write news.md]
-    L -- Attempted call failed --> F[Stop: fail closed, nothing published]
+    L -- Responses valid --> W[Render + write news.md]
+    L -- API error or invalid response --> F[Stop: fail closed, nothing published]
     R --> W
     Z --> W
 ```
@@ -97,7 +97,7 @@ flowchart LR
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
 - When fallback top stories are auto-selected, the digest prefers category diversity before repeating the same lane.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
-- Categorization has three outcomes. A successful API call publishes model output. A missing `OPENAI_API_KEY` may proceed with local heuristic categorization, which is the intentional manual path. An API call that was attempted and then failed — quota, timeout, connection, malformed response, or a response that omits candidates from both `items` and `off_topic_ids` — raises, so nothing is rendered or published. Heuristic output is never published as though it came from the model.
+- Categorization has three outcomes. Validated dedupe and enrichment responses proceed to rendering. A missing `OPENAI_API_KEY` may proceed with the existing local heuristic path. An attempted API failure — quota, timeout, connection, malformed response, or invalid dispositions including missing, repeated, unknown, or overlapping IDs — raises before rendering. The complete response is validated before applying its contents or promoting a keep; see the [API response contract](development.md#api-response-contract).
 - `--dispatch-publish` triggers `.github/workflows/publish-digest.yml` with a compressed digest payload, and that workflow runs the repo-local `--publish-issue` path on GitHub Actions. Direct `--publish-issue` remains a manual fallback.
 - Short display titles are generated only for kept items after duplicates are resolved.
 - Publication uses one frozen Eastern date for dispatch inputs, title generation and issue selection. Actions requires `DIGEST_DATE`; missing, malformed or noncurrent dates fail closed, with a second date check after issue lookup before starting a write.

@@ -44,6 +44,18 @@ Direct local `--publish-issue` without `DIGEST_DATE` remains a manual fallback u
 For rollout, merge the producer, receiver and workflow lock together in each repo, then update the local checkout before the next agent run. Older callers missing `digest_date` fail closed against the new receiver. Already-running workflows using older code are not retroactively protected; let those finish or handle them explicitly before relying on the new gate. No schedule or fallback-policy change is part of this batch.
 
 
+## API response contract
+
+The API graph uses separate dedupe and enrichment responses:
+
+- Dedupe must return every requested group exactly once and account for every requested item exactly once as a keep or duplicate within its own group. Distinct keeps require explicit singleton clusters with `duplicate_ids: []`, including discovery-only items. Off-topic filtering belongs to enrichment; dedupe may omit `off_topic_ids` or leave it empty.
+- Enrichment must account for every requested item ID exactly once in `items` or `off_topic_ids`, with no overlap, repeats, or unknown IDs. An omitted `off_topic_ids` defaults to an empty list.
+- The complete set of response dispositions is validated before applying response contents or promoting a requested keep. Omitted candidates are not silently seeded or retained. Valid singleton/promotion behavior and optional title/summary defaults remain unchanged. Duplicate counts include each discarded item once; distinct-source coverage remains a separate measure.
+
+Invalid API responses raise and stop the graph before rendering, as do other attempted API failures. The existing no-key local path remains available.
+
+These API responses do not use the candidate snapshot/agent-decision envelope. The daily agent path and live automation prompts are unchanged.
+
 ## Agent-driven mode
 
 This path keeps feed collection and filtering in Python, but lets Codex or Claude Code handle dedupe/categorization without `OPENAI_API_KEY`.

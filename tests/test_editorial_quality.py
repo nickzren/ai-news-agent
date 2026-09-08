@@ -166,17 +166,12 @@ def test_coverage_excludes_promoted_keep_source(tmp_path, route):
     assert "— Wire B (2 sources)" in graph.to_markdown([kept])
 
 
-def test_repeated_api_ids_do_not_inflate_visible_source_coverage():
-    kept, skipped = graph._apply_dedupe_response(
-        [(1, [_item(0), _item(1, "Wire B")])],
-        _response(["g1i2", "g1i2"]),
-    )
-
-    # Identity validation/accounting is deliberately deferred; coverage has a separate invariant.
-    assert skipped == 2
-    assert kept[0]["coverage_sources"] == ["Wire B"]
-    assert graph._serialize_enrichment_item(kept[0])["coverage_count"] == 2
-    assert "— Wire A (2 sources)" in graph.to_markdown(kept)
+def test_repeated_api_ids_are_rejected_before_coverage_or_skip_count():
+    with pytest.raises(ValueError):
+        graph._apply_dedupe_response(
+            [(1, [_item(0), _item(1, "Wire B")])],
+            _response(["g1i2", "g1i2"]),
+        )
 
 
 def test_same_source_repetition_does_not_outrank_a_newer_story():
