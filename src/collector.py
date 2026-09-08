@@ -11,7 +11,7 @@ from typing import Any, TypedDict, cast
 from urllib.error import URLError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from urllib.request import Request, urlopen
 
 import feedparser
@@ -41,6 +41,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
 logger = logging.getLogger(__name__)
 
 _DAY = timedelta(days=1)
+_MAX_FUTURE_SKEW = timedelta(hours=1)
 
 # Location of feeds configuration file (project root)
 _FEEDS_FILE = Path(__file__).resolve().parent.parent / "feeds.json"
@@ -200,6 +201,10 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
             header.lower(): value for header, value in response.headers.items()
         }
         response_headers.setdefault("content-type", "application/rss+xml")
+        # Parsing bytes needs an explicit base; feedparser applies xml:base on top.
+        response_headers["content-location"] = urljoin(
+            response.geturl(), response_headers.get("content-location", "")
+        )
     return feedparser.parse(payload, response_headers=response_headers)
 
 
@@ -261,8 +266,10 @@ def _fetch_feed_entries(
 
 def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
     """Return collected items plus feed health stats for the current run."""
-    cutoff = _now() - _DAY
-    logger.info("Collecting items newer than %s", cutoff)
+    now = _now()
+    cutoff = now - _DAY
+    latest = now + _MAX_FUTURE_SKEW
+    logger.info("Collecting items between %s and %s", cutoff, latest)
     items: list[CollectedItem] = []
     feeds = _load_feeds()
     feed_results: list[FeedFetchResult] = []
@@ -300,7 +307,7 @@ def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
             if not ts:
                 continue
 
-            if ts < cutoff:
+            if ts < cutoff or ts > latest:
                 continue
 
             title = _clean_html_text(e.get("title", ""))
@@ -339,6 +346,6 @@ def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
 
 
 def collect_items() -> list[CollectedItem]:
-    """Return list[dict] fresh within 24 h."""
+    """Return items within the 24-hour window plus one hour of future skew."""
     items, _stats = collect_items_with_stats()
     return items

@@ -138,6 +138,18 @@ The default digest output is compact and title-first. `summary_line` and `execut
 
 The collector reads RSS feed URLs from [`feeds.json`](../feeds.json) in the project root. The file should contain a JSON object where each key is a feed URL and each value specifies the `category` and human-readable `source` name.
 
+RSS and Atom relative links are resolved before URL normalization and deduplication.
+The final response URL (after redirects) supplies the default base; an absolute or
+relative `Content-Location` header overrides it, and nested `xml:base` attributes
+are handled by feedparser. See [feedparser's resolution rules](https://feedparser.readthedocs.io/en/stable/resolving-relative-links.html).
+
+Collection captures one UTC timestamp before fetching any feeds. Dated items are
+accepted from exactly 24 hours before that timestamp through exactly one hour after
+it, inclusive. The one-hour allowance tolerates publisher clock skew; later dates
+and missing dates are excluded. Fetch duration does not move either boundary.
+Filtering dates does not turn a successfully fetched and parsed feed into a failure;
+feed-health and empty-day policies are unchanged.
+
 Optional fields:
 
 - `type`: source-specific handling such as paper limits
