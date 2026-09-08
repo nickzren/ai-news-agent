@@ -227,4 +227,3 @@ def test_explicit_stale_date_is_rejected_even_for_direct_manual_publish(publicat
         publisher.publish_issue(news_file)
 
     assert writes == []
-

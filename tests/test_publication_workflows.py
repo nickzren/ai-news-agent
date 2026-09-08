@@ -151,4 +151,3 @@ def test_legacy_ai_schedule_remains_1230_eastern():
     assert triggers["schedule"] == [
         {"cron": "30 12 * * *", "timezone": "America/New_York"}
     ]
-
