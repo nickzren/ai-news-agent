@@ -788,8 +788,8 @@ def test_full_graph_does_not_reach_render_when_openai_request_fails(monkeypatch)
     assert rendered == []
 
 
-def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
-    """Local fallback should keep originals and drop obvious duplicates."""
+def test_node_categorize_without_api_key_keeps_near_duplicate_headlines(monkeypatch):
+    """Similar but different headlines need an editorial duplicate decision."""
     items = [
         _item("a", "OpenAI launches realtime coding assistant for developers", 12, source="OpenAI"),
         _item("b", "OpenAI launches realtime coding assistant for enterprise developers", 11, source="TechCrunch"),
@@ -801,13 +801,10 @@ def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
 
     result = node_categorize({"items": items})
 
-    assert len(result["items"]) == 1
-    assert result["items"][0]["title"] == "OpenAI launches realtime coding assistant for developers"
-    assert result["items"][0]["summary_line"] == ""
-    assert result["items"][0]["tier"] == "normal"
-    assert result["items"][0]["coverage_sources"] == ["TechCrunch"]
+    assert [item["id"] for item in result["items"]] == ["a", "b"]
+    assert [item["coverage_sources"] for item in result["items"]] == [[], []]
     assert result.get("executive_summary") == ""
-    assert result.get("top_stories") == ["g1i1"]
+    assert result.get("top_stories") == ["g1i1", "g1i2"]
 
 
 def test_node_categorize_without_api_key_uses_duplicate_summary_when_primary_is_blank(monkeypatch):
@@ -815,7 +812,7 @@ def test_node_categorize_without_api_key_uses_duplicate_summary_when_primary_is_
         _item("a", "OpenAI launches realtime coding assistant for developers", 12, source="OpenAI"),
         _item(
             "b",
-            "OpenAI launches realtime coding assistant for enterprise developers",
+            "OpenAI launches realtime coding assistant for developers",
             11,
             source="TechCrunch",
             summary="Independent reporting explains why the new coding assistant matters. Extra detail follows.",

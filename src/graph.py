@@ -745,26 +745,27 @@ def _build_candidate_export_status(
     }
 
 
+def _fallback_title_key(item: CollectedItem) -> str:
+    title = item.get("original_title")
+    if not isinstance(title, str) or not title.strip():
+        title = item.get("title")
+    if not isinstance(title, str):
+        return ""
+    return " ".join(title.split()).casefold()
+
+
 def _fallback_resolve_groups(groups: list[list[CollectedItem]]) -> tuple[list[ResolvedItem], int]:
     kept_items: list[ResolvedItem] = []
     skipped_duplicates = 0
 
     for group_index, group in enumerate(groups, start=1):
         resolved_group: list[ResolvedItem] = []
-        resolved_match_data: list[ItemMatchData] = []
+        resolved_by_title: dict[str, ResolvedItem] = {}
         for item_index, item in enumerate(group, start=1):
-            item_match_data = _build_item_match_data(item)
-            duplicate_index = next(
-                (
-                    idx
-                    for idx, existing_data in enumerate(resolved_match_data)
-                    if _is_high_confidence_duplicate_data(existing_data, item_match_data)
-                ),
-                None,
-            )
-            if duplicate_index is not None:
+            title_key = _fallback_title_key(item)
+            existing_item = resolved_by_title.get(title_key) if title_key else None
+            if existing_item is not None:
                 skipped_duplicates += 1
-                existing_item = resolved_group[duplicate_index]
                 if not existing_item.get("summary_line"):
                     existing_item["summary_line"] = _fallback_summary_line(item)
                 existing_item["coverage_sources"] = _normalize_coverage_sources(
@@ -780,7 +781,8 @@ def _fallback_resolve_groups(groups: list[list[CollectedItem]]) -> tuple[list[Re
             item["tier"] = "normal"
             item["coverage_sources"] = []
             resolved_group.append(item)
-            resolved_match_data.append(item_match_data)
+            if title_key:
+                resolved_by_title[title_key] = item
 
         kept_items.extend(resolved_group)
 

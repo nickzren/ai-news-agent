@@ -54,6 +54,15 @@ The API graph uses separate dedupe and enrichment responses:
 
 Invalid API responses raise and stop the graph before rendering, as do other attempted API failures. The existing no-key local path remains available.
 
+Local duplicate removal requires a nonempty full original headline matching another
+headline in the same candidate group after case and whitespace normalization. If
+the original headline is unavailable, it uses the source title. Numbers,
+punctuation and word order are preserved; shared words or summaries alone do not
+authorize removal. Candidate grouping remains deliberately broader, and API/agent
+editorial duplicate decisions are unchanged. This conservative fallback may retain
+multiple reports of one event. Conversely, identical generic headlines can still
+describe different events; headline equality is not semantic verification.
+
 These API responses do not use the candidate snapshot/agent-decision envelope. The daily agent path and live automation prompts are unchanged.
 
 ## Agent-driven mode
