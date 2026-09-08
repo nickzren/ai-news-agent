@@ -6,5 +6,5 @@
 - **[Databricks raises $200 million for AI infrastructure](https://example.com/e)** — VentureBeat
 
 ### Tools & Applications
-- [OpenAI launches realtime coding assistant for enterprise developers](https://example.com/b) — TechCrunch
 - [Microsoft releases Copilot vision API for Windows developers](https://example.com/d) — Microsoft AI
+- [OpenAI launches realtime coding assistant for enterprise developers](https://example.com/b) — TechCrunch
