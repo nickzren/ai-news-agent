@@ -83,6 +83,21 @@ uv run python src/main.py --dispatch-publish
 
 `--check-issue` writes `digest-issue-status.json` by default. `--candidates-only` writes `digest-candidates.json` and `digest-run-status.json` by default. Use `--candidates-file <path>`, `--status-file <path>`, and `--issue-status-file <path>` to override these artifacts.
 
+At handler entry, `--check-issue` removes its previous issue-status file before
+checking GitHub; `--candidates-only` removes its previous run-status and candidate
+files before importing the graph or collecting feeds. Missing files are allowed,
+but a removal error stops the command before the check/export. Successful runs
+write fresh artifacts, and handled preflight or feed-health failures still write
+fresh error status with the existing retry semantics. Unexpected failures after
+invalidation cannot leave the previous run's artifacts in those selected paths.
+
+This is a handler-entry safeguard, not a startup safeguard: a `uv` failure, Python
+startup failure, or top-level import failure before the handler is reached can
+still leave old files. Callers must not treat files left by a command that failed
+before handler entry as fresh results. Before-launch invalidation belongs in the
+outer runner and remains a separate change; this guard does not update automation
+prompts, cache configuration, or publication behavior.
+
 ### Decision schema
 
 Agent decisions should use this JSON shape:
