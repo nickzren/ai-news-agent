@@ -239,4 +239,3 @@ def test_malformed_api_response_stops_before_render(case, monkeypatch, tmp_path,
         graph.build_graph().invoke({"items": []})
     assert not (tmp_path / "news.md").exists()
     assert len(calls) == (1 if case.startswith("dedupe-") else 2)
-
