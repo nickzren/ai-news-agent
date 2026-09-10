@@ -1,9 +1,11 @@
 {
   "schema_version": 2,
   "kind": "ai-news-agent.decisions",
-  "snapshot_id": "sha256:d0a86aad82478b7c6d80b397115016a52160f3e2efcab3543b05fe495a954227",
+  "snapshot_id": "sha256:b2528e40f323842ea3110c6d574ee97eb20f816f09a1d701d6501d27848f57ea",
   "executive_summary": "OpenAI launched a new coding assistant for developers.",
-  "top_stories": ["g1i1"],
+  "top_stories": [
+    "g1i1"
+  ],
   "groups": [
     {
       "group_id": "g1",
@@ -22,7 +24,9 @@
     },
     {
       "group_id": "g2",
-      "off_topic_ids": ["g2i1"],
+      "off_topic_ids": [
+        "g2i1"
+      ],
       "clusters": []
     }
   ]
