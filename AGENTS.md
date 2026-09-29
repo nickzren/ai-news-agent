@@ -8,7 +8,7 @@
 - `README.md` is for newsletter readers only; keep it free of developer detail.
 - [docs/development.md](docs/development.md): setup, CI and scheduled runs, API response contract, agent-driven mode and decision schema, feed configuration.
 - [docs/architecture.md](docs/architecture.md): pipeline diagrams and design notes.
-- [docs/follow-ups.md](docs/follow-ups.md): deferred work.
+- [docs/follow-ups.md](docs/follow-ups.md): known limitations.
 - [feeds.json](feeds.json): news sources.
 
 ## Verify Changes
@@ -44,6 +44,10 @@
 - `digest-candidates.json`: grouped candidate snapshot.
 - `digest-decisions.json`: agent editorial decisions.
 - `news.md`: rendered digest body.
+
+## Editorial Bar
+- Mark tutorials, Academy lessons, prompt guides, event promos, conference marketing, discount posts, and lightweight culture or reaction pieces as off-topic unless they reflect a material industry change. This is the same bar the API fallback applies.
+- Keep quiet days short; do not pad the digest to reach a length.
 
 ## Decision Shape
 - For the full input contract, inspect the current `digest-candidates.json`, including `decision_guidance`, and the decision-schema section in [docs/development.md](docs/development.md). `keep_id`, `duplicate_ids`, `off_topic_ids`, and `top_stories` refer to candidate `item_id` values such as `g1i1`, never the article's `id` or `link`.

@@ -54,11 +54,6 @@
     "source": "The Verge",
     "source_role": "independent_reporting"
   },
-  "https://venturebeat.com/category/ai/feed/": {
-    "category": "All",
-    "source": "VentureBeat",
-    "source_role": "independent_reporting"
-  },
   "https://www.wired.com/feed/tag/ai/latest/rss": {
     "category": "All",
     "source": "Wired AI",
